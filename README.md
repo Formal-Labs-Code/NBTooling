@@ -4,7 +4,7 @@
 
 # NBTooling
 
-[![Tests](https://github.com/NB-Tooling/NBTooling/actions/workflows/tests.yml/badge.svg)](https://github.com/NB-Tooling/NBTooling/actions/workflows/tests.yml)
+[![Tests](https://github.com/Formal-Labs-Code/NBTooling/actions/workflows/tests.yml/badge.svg)](https://github.com/Formal-Labs-Code/NBTooling/actions/workflows/tests.yml)
 
 Static analysis for data science notebooks and scripts - a shared core
 library plus three tools, each with one job.
@@ -34,7 +34,7 @@ CLI and (for NBHarness) through a JupyterLab extension.
 Quick version:
 
 ```bash
-git clone git@github.com:NB-Tooling/NBTooling.git
+git clone git@github.com:Formal-Labs-Code/NBTooling.git
 cd NBTooling
 python3 -m venv .venv
 source .venv/bin/activate

@@ -174,14 +174,24 @@ def build_fixpoint_dependency_edges(notebook_IR) -> dict[int, set[int]]:
 build_dependency_edges = build_fixpoint_dependency_edges
 
 
-def _connected_component(edges: dict[int, set[int]], cell_id: int) -> set[int]:
-    """Transitive closure over `edges`, following both directions (what
-    cell_id depends on, and what depends on cell_id). Shared graph
-    utility, same reasoning as build_dependency_edges above."""
+def reverse_edges(edges: dict[int, set[int]]) -> dict[int, set[int]]:
+    """Flips a dependency-edges graph: reverse[X] is the set of cells
+    that depend on X (edges[X] is the set of cells X depends on). Shared
+    graph utility - both _connected_component below and NBCompile's SCC
+    detection (Kosaraju's algorithm needs a forward and a reverse DFS
+    pass) need this exact operation."""
     reverse: dict[int, set[int]] = {}
     for cell, deps in edges.items():
         for dep in deps:
             reverse.setdefault(dep, set()).add(cell)
+    return reverse
+
+
+def _connected_component(edges: dict[int, set[int]], cell_id: int) -> set[int]:
+    """Transitive closure over `edges`, following both directions (what
+    cell_id depends on, and what depends on cell_id). Shared graph
+    utility, same reasoning as build_dependency_edges above."""
+    reverse = reverse_edges(edges)
 
     seen = {cell_id}
     frontier = {cell_id}

@@ -17,7 +17,7 @@ CLI and (for NBHarness) through a JupyterLab extension.
 ## Setup
 
 ```bash
-git clone git@github.com:NB-Tooling/NBTooling.git
+git clone git@github.com:Formal-Labs-Code/NBTooling.git
 cd NBTooling
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
@@ -116,7 +116,7 @@ Node/npm toolchain) never weighs down a plain `pip install nbharness`:
 ### Setup
 
 ```bash
-git clone git@github.com:NB-Tooling/NBTooling.git
+git clone git@github.com:Formal-Labs-Code/NBTooling.git
 cd NBTooling
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate

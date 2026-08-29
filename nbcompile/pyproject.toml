@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "nbcompile"
 version = "0.1.0"
-description = "Notebook to script converter, using nbcore's dependency graph to compute true execution order - not yet implemented"
+description = "Notebook to script converter, using nbcore's dependency graph to compute true execution order"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -16,6 +16,9 @@ dependencies = [
 dev = [
     "pytest",
 ]
+
+[project.scripts]
+nbcompile = "nbcompile.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nbcompile"]
