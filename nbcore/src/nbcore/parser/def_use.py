@@ -2,17 +2,21 @@
 Replacement for beniget.DefUseChains + IR/visitors/assigns_visitor.py's
 AssignsVisitor, ported onto our own AST.
 
-Phase-1 simplification: `DefUseChains` is *scope-insensitive* -- a name
-counts as "bound" if it is assigned/imported/defined/parameterized anywhere
-in the cell's AST, regardless of which function/class scope that happens in.
-Real Python scoping (closures, shadowing between a module-level name and an
-unrelated local in a nested function) is not modeled. This only matters for
-cells with non-trivial nested-scope shadowing, which is rare in notebook
-code; see parser/README.md. What actually gets consumed downstream is
-`unbound_names` -- identifiers used in this cell that resolve to *neither* a
-binding in this cell nor a Python builtin conceptually "elsewhere" (a
-previous cell, an import) -- and this flat approximation is a safe fit for
-that purpose in the common case.
+`DefUseChains` is scope-aware for function and class bodies: a `def` or
+`class` binds only its own name in the cell, while its parameters and local
+assignments stay inside its body. Names a body reads without binding them
+itself (free variables) count as reads at the enclosing level, as do
+decorators, default values, annotations and class bases, which Python
+evaluates there. `global x` makes an assignment to `x` inside a function
+bind `x` at cell level. Comprehensions are still treated flat (their loop
+variables bind at the enclosing level), and binding is order-insensitive
+within each scope: `x = f(x)` both reads and binds `x`, so `x` is not
+unbound. See parser/README.md.
+
+What actually gets consumed downstream is `unbound_names` -- identifiers
+used in this cell that resolve to *neither* a binding in this cell nor a
+Python builtin, i.e. that must come from elsewhere (a previous cell, an
+import).
 """
 
 import builtins as _builtins_module
@@ -33,22 +37,42 @@ class DefUseChains:
 
     def visit(self, module):
         bound, used = set(), set()
-        for node in n.walk(module):
+        self._collect([module], bound, used, set(), bound)
+        self.unbound_names = used - bound - _BUILTIN_NAMES
+        return self
+
+    def _collect(self, roots, bound, used, declared_global, cell_bound):
+        """Bindings/reads of one scope into `bound`/`used`, without
+        descending into nested function or class bodies (see _nested)."""
+        stack = list(roots)
+        while stack:
+            node = stack.pop()
+            if isinstance(node, n.FunctionDef):
+                bound.add(node.name)
+                args = node.args
+                stack.extend(node.decorator_list)
+                stack.extend(args.defaults)
+                stack.extend(d for d in args.kw_defaults if d is not None)
+                params = [*args.args, *args.kwonlyargs, *(a for a in (args.vararg, args.kwarg) if a)]
+                stack.extend(a.annotation for a in params if a.annotation is not None)
+                if node.returns is not None:
+                    stack.append(node.returns)
+                self._nested(node.body, {a.arg for a in params}, used, cell_bound)
+                continue
+            if isinstance(node, n.ClassDef):
+                bound.add(node.name)
+                stack.extend(node.bases)
+                stack.extend(node.keywords)
+                stack.extend(node.decorator_list)
+                self._nested(node.body, set(), used, cell_bound)
+                continue
             if isinstance(node, n.Name):
                 if isinstance(node.ctx, n.Store):
                     bound.add(node.id)
                 elif isinstance(node.ctx, n.Load):
                     used.add(node.id)
-            elif isinstance(node, n.FunctionDef):
-                bound.add(node.name)
-                for a in (*node.args.args, *node.args.kwonlyargs):
-                    bound.add(a.arg)
-                if node.args.vararg:
-                    bound.add(node.args.vararg.arg)
-                if node.args.kwarg:
-                    bound.add(node.args.kwarg.arg)
-            elif isinstance(node, n.ClassDef):
-                bound.add(node.name)
+            elif isinstance(node, n.Global):
+                declared_global.update(node.names)
             elif isinstance(node, (n.Import, n.ImportFrom)):
                 for alias in node.names:
                     if alias.name != "*":
@@ -56,8 +80,16 @@ class DefUseChains:
             elif isinstance(node, n.ExceptHandler):
                 if node.name:
                     bound.add(node.name)
-        self.unbound_names = used - bound - _BUILTIN_NAMES
-        return self
+            stack.extend(n.iter_child_nodes(node))
+
+    def _nested(self, body, params, enclosing_used, cell_bound):
+        """A function/class body as its own scope: its free variables become
+        reads of the enclosing scope, and `global` names it assigns become
+        cell-level bindings."""
+        bound, used, declared_global = set(params), set(), set()
+        self._collect(body, bound, used, declared_global, cell_bound)
+        cell_bound.update(bound & declared_global)
+        enclosing_used.update(used - (bound - declared_global))
 
 
 def _call_func_name(value):

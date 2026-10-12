@@ -272,5 +272,14 @@ class TestDataFrames(unittest.TestCase):
         a_state.condition(IntermediateRepresentations("", 2), Node("", None, line_number=3, path=1), errors)
         self.assertEqual(errors[0].source, predict_site)
 
+    def test_clone_assign_with_unknown_source_is_dull_not_keyerror(self):
+        from types import SimpleNamespace
+        from nbcore.analyses.dataleak_analysis import DataLeakAnalysis
+        node = SimpleNamespace(left_hand_side='copy', ast_node=None)
+        a_state = DataLeakAbstractState()
+        result = DataLeakAnalysis()._clone_assign(a_state, node, override_source='never_defined')
+        self.assertTrue(result.dull)
+        self.assertIs(a_state.state['copy'], result)
+
 if __name__ == "__main__":
     unittest.main()

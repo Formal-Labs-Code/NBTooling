@@ -145,12 +145,14 @@ data:
 
 ## Known simplifications (not gaps, but worth knowing about)
 
-- `def_use.py`'s `DefUseChains` is **scope-insensitive**: a name is "bound"
-  if it's assigned/imported/parameterized *anywhere* in the cell's AST,
-  regardless of nested function/class scope. Real closures and
-  shadowing-between-scopes aren't modeled. This only diverges from correct
-  behavior for cells with non-trivial nested-scope shadowing, which is rare
-  in notebook code.
+- `def_use.py`'s `DefUseChains` scopes function and class bodies: a
+  parameter or local only binds inside its body, and free variables of the
+  body count as reads of the cell (so a parameter shadowing a global no
+  longer hides the cell's dependency on that global). Two simplifications
+  remain: comprehensions are flat (their loop variables bind at the
+  enclosing level), and binding is order-insensitive within a scope, so
+  `x = f(x)` doesn't count `x` as unbound even though the cell reads a
+  previous `x`.
 - `try`/`except` control flow connects the `TryNode` itself to each
   handler (approximating "the body might raise") rather than simple_cfg's
   finer "any statement in the body can raise" edges. An

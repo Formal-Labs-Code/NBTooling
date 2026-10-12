@@ -59,6 +59,44 @@ class TestDefUse(unittest.TestCase):
         self.assertIn("z", duc.unbound_names)
         self.assertNotIn("x", duc.unbound_names)
 
+    def test_param_shadowing_a_global_does_not_hide_the_global(self):
+        # rtests/test7.ipynb's shape: `model` is a parameter of test_model,
+        # but the call's `model` argument is the module-level one from an
+        # earlier cell, so the cell still depends on it.
+        duc, _ = analyze(
+            "def test_model(X_local_test, y_local_test, model):\n"
+            "    model.predict(X_local_test, y_local_test)\n"
+            "\n"
+            "test_model(X, y, model)\n"
+        )
+        self.assertEqual(duc.unbound_names, {"X", "y", "model"})
+
+    def test_function_locals_do_not_bind_at_cell_level(self):
+        duc, _ = analyze("def f():\n    tmp = 1\n    return tmp\nprint(tmp)\n")
+        self.assertEqual(duc.unbound_names, {"tmp"})
+
+    def test_free_variable_in_function_body_is_unbound(self):
+        duc, _ = analyze("def f(a):\n    return a + scale\n")
+        self.assertEqual(duc.unbound_names, {"scale"})
+
+    def test_defaults_and_decorators_are_read_at_enclosing_level(self):
+        duc, _ = analyze("@register\ndef f(a=default_a, *, b=default_b):\n    return a + b\n")
+        self.assertEqual(duc.unbound_names, {"register", "default_a", "default_b"})
+
+    def test_global_assignment_binds_at_cell_level(self):
+        duc, _ = analyze("def f():\n    global counter\n    counter = start + 1\nf()\nprint(counter)\n")
+        self.assertEqual(duc.unbound_names, {"start"})
+
+    def test_class_body_is_its_own_scope(self):
+        duc, _ = analyze(
+            "class C(Base):\n"
+            "    attr = value\n"
+            "    def m(self):\n"
+            "        return self.attr + other\n"
+            "print(attr)\n"
+        )
+        self.assertEqual(duc.unbound_names, {"Base", "value", "other", "attr"})
+
 
 if __name__ == "__main__":
     unittest.main()

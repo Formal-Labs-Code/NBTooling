@@ -1,3 +1,4 @@
+import json
 import unittest
 from nbharness.cli import *
 from nbcore.resource_utils.utils import read_json, TEST_RES_PATH
@@ -127,6 +128,28 @@ class TestNBHarnessCLI(unittest.TestCase):
                 level=10
             )
         self.assertEqual(results_false, '')
+    def test_dataleak_param_shadowing_global(self):
+        """
+        rtests/test7.ipynb's shape: a function parameter named `model`
+        shadows the global `model` passed into it. def_use used to treat the
+        parameter as binding `model` for the whole cell, so the runner
+        explored cell 3 straight after cell 1 (skipping the cell defining
+        `model`) and crashed with KeyError. The leak must be reported on
+        the real path, through cell 2.
+        """
+        results = json.loads(nbharness(
+                filename=None,
+                notebook=read_json(TEST_RES_PATH + "dataleak_shadowed_param_true.ipynb"),
+                analyses=[DATA_LEAK],
+                start=0,
+                level=10
+            ))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["path"], [0, 1, 2, 3])
+        err = results[0]["errors"][0]
+        self.assertEqual((results[0]["cell_id"], err["line"]), (3, 2))
+        self.assertTrue(err["message"].startswith("Train/test overlap:"))
+        self.assertEqual((err["source"]["cell"], err["source"]["line"]), (2, 5))
 
 if __name__ == "__main__":
     unittest.main()

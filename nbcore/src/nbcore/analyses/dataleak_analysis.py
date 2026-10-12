@@ -44,7 +44,10 @@ class DataLeakAnalysis(Analysis):
         Gluing function for various construct transformers. 
         '''
         if isinstance(cfg_node, RestoreNode):
-            other: DataLeakAbstractDomain = a_state.state[cfg_node.right_hand_side[0]]
+            other: DataLeakAbstractDomain = a_state.state.get(cfg_node.right_hand_side[0])
+            if other is None:
+                a_state.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(dull=True)
+                return a_state
             a_state.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin, usage_sites=other.usage_sites)
 
         if not cfg_node.ast_node:
@@ -456,7 +459,13 @@ class DataLeakAnalysis(Analysis):
 
             source_arg = cfg_node.ast_node.args[arg_pos].id
 
-        other: DataLeakAbstractDomain = as_transformed.state[source_arg]
+        other: DataLeakAbstractDomain = as_transformed.state.get(source_arg)
+        if other is None:
+            # Source never reached this path's state (e.g. a cell explored
+            # out of order) - treat like an untracked argument, don't crash.
+            as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(dull= True)
+            return as_transformed.state[cfg_node.left_hand_side]
+
         as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin, usage_sites=other.usage_sites)
 
         return as_transformed.state[cfg_node.left_hand_side]
