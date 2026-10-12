@@ -56,6 +56,22 @@ class TestNBHarnessScripts(unittest.TestCase):
         # the hoisted receiver temp is reported under its original text
         self.assertEqual(err["source"]["call"], "MinMaxScaler().fit_transform")
 
+    def test_helpers_with_defaults_keywords_and_early_returns(self):
+        """main() -> load_data(path, delimiter=","), preprocess(X, scale=True)
+        with an early `return X`, evaluate(model, X=..., y=...)."""
+        results = run("dataleak_script_helpers_true.py")
+        self.assertEqual(len(results), 1)
+        err = results[0]["errors"][0]
+        self.assertEqual(err["file_line"], 21)
+        self.assertIn("passed to `model.score` (in `evaluate`)", err["message"])
+        self.assertEqual((err["source"]["call"], err["source"]["function"], err["source"]["file_line"]),
+                         ("scaler.fit_transform", "preprocess", 17))
+
+    def test_helpers_clean_when_scaled_per_split(self):
+        # preprocess() applied to each split separately: no leak, even though
+        # its untainted early-return path joins the scaled one
+        self.assertEqual(run("dataleak_script_helpers_false.py"), [])
+
     def test_notebook_only_analysis_rejected_without_markers(self):
         with self.assertRaises(ValueError):
             nbharness(filename=os.path.join(TEST_RES_PATH, "dataleak_script_flat_true.py"), notebook=None,

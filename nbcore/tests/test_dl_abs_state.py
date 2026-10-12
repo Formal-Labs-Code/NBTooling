@@ -272,6 +272,31 @@ class TestDataFrames(unittest.TestCase):
         a_state.condition(IntermediateRepresentations("", 2), Node("", None, line_number=3, path=1), errors)
         self.assertEqual(errors[0].source, predict_site)
 
+    def test_non_dull_domains_with_different_taint_are_not_equal(self):
+        dfs = DataFrameSet({'x': [DataFrame('x', Columns({'c': True}), Rows(0, 4))]})
+        self.assertNotEqual(DataLeakAbstractDomain(dfs, False, set()), DataLeakAbstractDomain(dfs, True, set()))
+        self.assertEqual(DataLeakAbstractDomain(dull=True), DataLeakAbstractDomain(dull=True))
+
+    def test_join_keeps_taint_on_the_tainted_source_only(self):
+        # `return X` (untainted) joined with `return scaler.fit_transform(X)`:
+        # train/test splits of the untainted rows must not count as tainted.
+        def domain(source, taint, rows, usage):
+            dfs = DataFrameSet({source: [DataFrame(source, Columns({'c': True}), rows)]})
+            return DataLeakAbstractDomain(dfs, taint, {usage})
+        train = DataLeakAbstractState(); train.state['a'] = domain('raw', False, Rows(0, 4), Usage.TRAIN)
+        other = DataLeakAbstractState(); other.state['a'] = domain('scaled_train', True, Rows(0, 4), Usage.TRAIN)
+        train.aug_join(other)
+        self.assertEqual(train.state['a'].tainted_sources, {'scaled_train'})
+
+        a_state = DataLeakAbstractState()
+        a_state.state['fit'] = train.state['a']
+        a_state.state['pred'] = domain('raw', False, Rows(5, 8), Usage.TEST)
+        a_state.state['pred'].taint = True  # tainted, but via a different source than 'raw'
+        a_state.state['pred'].tainted_sources = {'scaled_test'}
+        errors = []
+        a_state.condition(IntermediateRepresentations("", 1), Node("", None, line_number=1, path=1), errors)
+        self.assertEqual(errors, [])
+
     def test_demangle_restores_inlined_names_and_leaves_others(self):
         from types import SimpleNamespace
         from nbcore.analyses.abs_states.dataleak_abs_state import demangle

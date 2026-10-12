@@ -201,6 +201,23 @@ class TestNBHarnessCLI(unittest.TestCase):
                 result = nbharness(filename=None, notebook={"cells": [{"cell_type": "code", "source": src}]},
                                    analyses=[DATA_LEAK], start=0, level=10)
                 self.assertIn("Preprocessing leak", result)
+    def test_dataleak_two_way_split(self):
+        """Two one-array splits in a row. The split position used to come
+        from a visit counter assuming four targets per split, so the second
+        split read a nonexistent second argument and its results went dull."""
+        src = ("import numpy as np\nfrom sklearn.model_selection import train_test_split\n"
+               "from sklearn.linear_model import LogisticRegression\n"
+               "X = np.genfromtxt('d.csv')\n"
+               "A = np.genfromtxt('a.csv')\n"
+               "A_train, A_test = train_test_split(A, test_size=0.25)\n"
+               "X_train, X_test = train_test_split(X, test_size=0.25)\n"
+               "lr = LogisticRegression()\na = lr.fit(X, X)\np = lr.predict(X_test)\n")
+        result = nbharness(filename=None, notebook={"cells": [{"cell_type": "code", "source": src}]},
+                           analyses=[DATA_LEAK], start=0, level=10)
+        self.assertIn("Train/test overlap: `X_test` passed to `lr.predict`", result)
+        clean = src.replace("a = lr.fit(X, X)", "a = lr.fit(X_train, X_train)")
+        self.assertEqual(nbharness(filename=None, notebook={"cells": [{"cell_type": "code", "source": clean}]},
+                                   analyses=[DATA_LEAK], start=0, level=10), "")
 
 if __name__ == "__main__":
     unittest.main()

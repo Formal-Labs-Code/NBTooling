@@ -49,7 +49,7 @@ class Usage(Enum):
     NONE = auto()
 
 class DataLeakAbstractDomain:
-    def __init__(self, dfs: DataFrameSet = None, taint: bool = False, usages: set[Usage] = None, dull=False, fitted_from: tuple = None, taint_origin: dict = None, usage_sites: dict = None) -> None:
+    def __init__(self, dfs: DataFrameSet = None, taint: bool = False, usages: set[Usage] = None, dull=False, fitted_from: tuple = None, taint_origin: dict = None, usage_sites: dict = None, tainted_sources: set = None) -> None:
         '''
         Abstract domain that keeps track of data frames, if those data frames are tainted,
         if any data frames have been used for testing or training
@@ -79,19 +79,29 @@ class DataLeakAbstractDomain:
         # added that usage (e.g. TRAIN -> `lr.fit(X, y)`). Also provenance
         # only, also outside __eq__.
         self.usage_sites: dict = dict(usage_sites or {})
+        # Which of dfs's sources are tainted. apply_taint renames every frame
+        # to one new source, so after a join (e.g. two returns of a helper,
+        # one scaled, one not) only frames from a tainted source carry the
+        # taint, not the whole value. Defaults to all current sources when
+        # constructed tainted, the old whole-value behavior.
+        if tainted_sources is None:
+            tainted_sources = set(self.dfs.frames) if taint else set()
+        self.tainted_sources: set = set(tainted_sources)
 
     def apply_taint(self, new_source: str, origin: dict = None) -> DataLeakAbstractDomain:
         self.taint = True
         self.dfs.rename_sources(new_source)
+        self.tainted_sources = {new_source}
         if origin:
             self.taint_origin = origin
         return self
 
     def __eq__(self, other: DataLeakAbstractDomain) -> bool:
-        if self.dull == other.dull:
+        if self.dull and other.dull:
             return True
 
-        return self.dfs == other.dfs and self.taint == other.taint and self.usages == other.usages
+        return (self.dfs == other.dfs and self.taint == other.taint and self.usages == other.usages
+                and self.tainted_sources == other.tainted_sources)
 
     def __ne__(self, other: DataLeakAbstractDomain) -> bool:
         return not self == other
@@ -126,7 +136,8 @@ class DataLeakAbstractState(AbstractState):
                     errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, label, ErrorType.TERMINAL, message, source=other))
                 return errors
             
-            if test_dfs.dfs.cartesian_overlap(train_dfs.dfs, weak=True) and test_dfs.taint and train_dfs.taint:
+            if test_dfs.taint and train_dfs.taint and self._tainted_part(test_dfs).cartesian_overlap(
+                    self._tainted_part(train_dfs), weak=True):
                 label, call, func = self._sink_of(node, cell_IR)
                 if label is not None:
                     origin = test_dfs.taint_origin or train_dfs.taint_origin
@@ -140,6 +151,10 @@ class DataLeakAbstractState(AbstractState):
                     errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, label, ErrorType.TERMINAL, message, source=origin))
                 return errors
         return errors
+
+    @staticmethod
+    def _tainted_part(domain: DataLeakAbstractDomain) -> DataFrameSet:
+        return DataFrameSet({s: l for s, l in domain.dfs.frames.items() if s in domain.tainted_sources})
 
     @staticmethod
     def _counterpart_site(cell_IR, node: Node, train_dfs: DataLeakAbstractDomain, test_dfs: DataLeakAbstractDomain) -> dict:
@@ -199,7 +214,8 @@ class DataLeakAbstractState(AbstractState):
                 self.state[other_var].dull | other_domain.dull,
                 self.state[other_var].fitted_from or other_domain.fitted_from,
                 self.state[other_var].taint_origin or other_domain.taint_origin,
-                {**other_domain.usage_sites, **self.state[other_var].usage_sites}
+                {**other_domain.usage_sites, **self.state[other_var].usage_sites},
+                self.state[other_var].tainted_sources | other_domain.tainted_sources,
             )
 
         return self

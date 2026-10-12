@@ -35,7 +35,6 @@ class DataLeakAnalysis(Analysis):
         # treated as a "this is test data" signal the way .predict() is -
         # see transform_transformer's docstring for what it actually does.
         self.transformKB = {'transform'}
-        self.tts_count = 0
         self.necessary = set[int]()
         self.abstract_state = DataLeakAbstractState()
 
@@ -49,7 +48,7 @@ class DataLeakAnalysis(Analysis):
             if other is None:
                 a_state.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(dull=True)
                 return a_state
-            a_state.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin, usage_sites=other.usage_sites)
+            a_state.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin, usage_sites=other.usage_sites, tainted_sources=other.tainted_sources)
 
         if not cfg_node.ast_node:
             return a_state
@@ -135,8 +134,10 @@ class DataLeakAnalysis(Analysis):
     def split_transformer(self, cfg_node, as_transformed):
         '''
         Dealing with train_test_split return values. For simplicity, always truncate based on test size.
-        Go over train_test_split return values, and regardless of their linkage to two first arguments,
-        perform splitting. After all 4 have been grabbed, counter is reset.
+        train_test_split returns a (train, test) pair per array argument, and the CFG gives each
+        unpacking target its own call node tagged with its position (target_index): target i is
+        the train (even i) or test (odd i) part of argument i // 2. Position-based rather than a
+        visit counter, so revisiting a node during the fixpoint doesn't shift the assignment.
         '''
         test_size_kw, train_size_kw = self._extract_kw(cfg_node, 'test_size'), self._extract_kw(cfg_node, 'train_size')
         train_size = train_size_kw[0].value.value if (train_size_kw and isinstance(train_size_kw[0].value, ast.Constant)) else None
@@ -144,13 +145,12 @@ class DataLeakAnalysis(Analysis):
 
         test_size = round(1.0 - train_size, 4) if not test_size else test_size
         
-        arg_pos = 1 if self.tts_count == 2 or self.tts_count == 3 else 0
-        invert_trunc = self.tts_count == 1 or self.tts_count == 3
+        index = getattr(cfg_node, "target_index", 0)
+        arg_pos = index // 2
+        invert_trunc = index % 2 == 1
 
         self._clone_assign(as_transformed, cfg_node, arg_pos= arg_pos)
         as_transformed.state[cfg_node.left_hand_side].dfs.truncate_rows(test_size, inverse=invert_trunc)
-
-        self.tts_count = self.tts_count + 1 if self.tts_count < 3 else 0
 
 
     def drop_transformer(self, cfg_node, as_transformed):
@@ -472,7 +472,7 @@ class DataLeakAnalysis(Analysis):
             as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(dull= True)
             return as_transformed.state[cfg_node.left_hand_side]
 
-        as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin, usage_sites=other.usage_sites)
+        as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin, usage_sites=other.usage_sites, tainted_sources=other.tainted_sources)
 
         return as_transformed.state[cfg_node.left_hand_side]
 
