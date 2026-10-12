@@ -8,19 +8,22 @@ class ErrorType(Enum):
     TERMINAL = "TERMINAL"
 
 class ErrorInfo(dict):
-    def __init__(self, cell_id, line, label, error_type, error_message):
+    def __init__(self, cell_id, line, label, error_type, error_message, source=None):
         self.cell_id = cell_id
         self.line = line
         self.label = label
         self.error_type = error_type
         self.error_message = error_message
+        # Optional provenance ({"cell", "line", "call", "variable"}) of what
+        # caused the error; only serialized when set.
+        self.source = source
 
     def __repr__(self):
         return "line: " + str(self.line) + " in cell " + str(self.cell_id) + " label " + str(self.label) + " type " + self.error_type + " msg " + self.error_message
 
     def __eq__(self, other):
         if (isinstance(other, ErrorInfo)):
-            return self.cell_id == other.cell_id and self.line == other.line and self.label == other.label and self.error_message == other.error_message and self.error_type == other.error_type
+            return self.cell_id == other.cell_id and self.line == other.line and self.label == other.label and self.error_message == other.error_message and self.error_type == other.error_type and self.source == other.source
         return False
 
 class PathResult:
@@ -83,8 +86,11 @@ class Result:
                 # any message containing a `"`.
                 error_json += (
                     f'{{"line":{err.line},"label":{json.dumps(err.label)}, '
-                    f'"error_type":{json.dumps(str(errty))}, "message":{json.dumps(err.error_message)}}},'
+                    f'"error_type":{json.dumps(str(errty))}, "message":{json.dumps(err.error_message)}'
                 )
+                if err.source is not None:
+                    error_json += f', "source":{json.dumps(err.source)}'
+                error_json += '},'
             error_json = error_json[:-1] + ']'
             if with_path:
                 error_json += f',"path":{path_result.path}'

@@ -76,18 +76,16 @@ def _normalize_findings(raw_result: str) -> list[dict[str, Any]]:
             if not isinstance(err, dict):
                 continue
 
-            line = err.get("line")
-            locations = []
-            if cell_id is not None:
-                locations.append(f"cell {cell_id}")
-            if line is not None:
-                locations.append(f"line {line}")
+            source = err.get("source")
+            locations = [{"role": "sink", "cell": cell_id, "line": err.get("line")}]
+            if source:
+                locations.append({"role": "source", "cell": source.get("cell"), "line": source.get("line")})
 
             findings.append(
                 {
                     "leakage_type": DATA_LEAK,
                     "sink": err.get("label"),
-                    "source": None,
+                    "source": source,
                     "path": path,
                     "locations": locations,
                     "message": err.get("message", ""),

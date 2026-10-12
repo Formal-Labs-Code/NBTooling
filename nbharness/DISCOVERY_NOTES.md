@@ -18,32 +18,30 @@ print(nbharness(None, notebook, [DATA_LEAK], 0, 10))
 The raw output is:
 
 ```json
-[{"cell_id":4,"errors":[{"line":2,"label":"X_selected_test","error_type":"ErrorType.TERMINAL","message":"Training model with data leak."}],"path":[0,1,2,3,4]}]
+[{"cell_id":4,"errors":[{"line":2,"label":"X_selected_test","error_type":"ErrorType.TERMINAL","message":"Preprocessing leak: `X_selected_test` passed to `lr.predict` is contaminated because `min_max_scaler.fit_transform` (cell 1, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model.","source":{"cell":1,"line":3,"call":"min_max_scaler.fit_transform","variable":"X"}}],"path":[0,1,2,3,4]}]
 ```
 
 This is the source of truth the wrapper normalizes.
 
-## Feasibility check A: path vs sink
+## Feasibility check A: path, sink and source
 
-NBHarness exposes the sink and the propagation path, but not a separate explicit source provenance field. The raw result includes:
+The raw result includes:
 
 - `cell_id`: the sink cell
 - `path`: the propagation chain through the notebook
-- `label`: the variable/value at the sink that is contaminated
-- `line`: the source-side/definition line metadata for the error
+- `label`: the contaminated variable at the sink
+- `line`: the sink's line within `cell_id`
+- `source` (preprocessing leaks only): the taint-introducing call - `cell`, `line`, `call` and the unsplit `variable` it ran on. The data-leak analysis records it when a taintKB call (`fit_transform`, `fit_resample`, ...) runs, or at the `fit()` behind a `transform()` on unsplit data, and carries it through assignments and joins.
 
-What the wrapper can populate:
+What the wrapper populates:
 
 - `sink`: the raw `label` value
+- `source`: the raw `source` object, or `null` when absent
 - `path`: the raw `path` list
-- `locations`: `cell {cell_id}` and `line {line}`
+- `locations`: `{"role": "sink", "cell", "line"}`, plus `{"role": "source", ...}` when a source is known
 - `message`: the raw `message`
 
-What it cannot honestly synthesize:
-
-- `source`: not explicitly exposed by the raw analyzer; the result gives the contaminated sink and path, not a separate origin node or provenance chain beyond the notebook path itself
-
-This means the wrapper should keep `source` as `null` unless the underlying analyzer later exposes a more specific origin field.
+`source` stays `null` for train/test overlap leaks (the same rows used for training and evaluation): there is no single originating call, and the analyzer does not yet record where each `fit()`/`predict()` usage happened.
 
 ## Feasibility check B: notebook execution / verify
 
@@ -55,6 +53,6 @@ For the NBHarness-first contract, the primary tool is still `analyze()`; `verify
 
 ## Relevance to later PoCs
 
-The key fact for the later verify/repair loop is that this analysis is already path-aware enough to report the sink and the notebook-level propagation chain, but it does not provide a clean, separate `source` field. That means a later verifier can rely on the existing `path` and `message`, while a repair loop will still need to infer or reconstruct the exact earlier cell(s) responsible for the contamination, rather than receiving a canonical source field from the analyzer.
+The key fact for the later verify/repair loop is that preprocessing leaks now come with a canonical `source` - the cell and line of the call to move after the split - so a repair loop can target it directly instead of reconstructing it from `path`. Overlap leaks still only give the sink and path.
 
 This wrapper is intentionally thin: it translates the raw analyzer output without inventing new analysis semantics.

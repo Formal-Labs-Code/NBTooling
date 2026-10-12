@@ -16,10 +16,20 @@ class TestNBHarnessMCPServer(unittest.TestCase):
         finding = result[0]
         self.assertEqual(finding["leakage_type"], "Data Leak Analysis")
         self.assertEqual(finding["sink"], "X_selected_test")
-        self.assertIsNone(finding["source"])
+        self.assertEqual(
+            finding["source"],
+            {"cell": 1, "line": 3, "call": "min_max_scaler.fit_transform", "variable": "X"},
+        )
         self.assertEqual(finding["path"], [0, 1, 2, 3, 4])
-        self.assertEqual(finding["locations"], ["cell 4", "line 2"])
-        self.assertEqual(finding["message"], "Training model with data leak.")
+        self.assertEqual(
+            finding["locations"],
+            [{"role": "sink", "cell": 4, "line": 2}, {"role": "source", "cell": 1, "line": 3}],
+        )
+        self.assertTrue(finding["message"].startswith("Preprocessing leak: `X_selected_test` passed to `lr.predict`"))
+        self.assertIn("`min_max_scaler.fit_transform` (cell 1, line 3)", finding["message"])
+
+    def test_analyze_reports_no_findings_for_clean_notebook(self):
+        self.assertEqual(analyze(read_json(TEST_RES_PATH + "dataleak_false.ipynb")), [])
 
 
 if __name__ == "__main__":

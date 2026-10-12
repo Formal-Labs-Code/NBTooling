@@ -222,11 +222,15 @@ class TestDataFrames(unittest.TestCase):
 
         a_state: DataLeakAbstractState = DataLeakAbstractState()
 
+        origin = {"cell": 0, "line": 3, "call": "scaler.fit_transform", "variable": "x_selected"}
         a_state.state['X_train'] = DataLeakAbstractDomain(dfs1, True, {Usage.TRAIN})
-        a_state.state['X_test'] = DataLeakAbstractDomain(dfs2, True, {Usage.TEST})
+        a_state.state['X_test'] = DataLeakAbstractDomain(dfs2, True, {Usage.TEST}, taint_origin=origin)
         errors = []
         a_state.condition(IntermediateRepresentations("", 1), Node("", None, line_number=1, path=1), errors)
-        self.assertEqual(errors, [ErrorInfo(1, 1, "", ErrorType.TERMINAL, "Training model with data leak.")])
+        self.assertEqual(errors, [ErrorInfo(1, 1, "", ErrorType.TERMINAL,
+            "Preprocessing leak: `` passed to `` is contaminated because `scaler.fit_transform` (cell 0, line 3) "
+            "ran on unsplit `x_selected` before the train/test split, so test-set statistics leak into the model.",
+            source=origin)])
 
         a_state.state['X_test'] = DataLeakAbstractDomain(dfs2, False, {Usage.TEST})
         errors = []
@@ -240,7 +244,8 @@ class TestDataFrames(unittest.TestCase):
 
         errors = []
         a_state.condition(IntermediateRepresentations("", 1), Node("", None, line_number=1, path=1), errors)
-        self.assertEqual(errors, [ErrorInfo(1, 1, "", ErrorType.TERMINAL, "Training model with data leak.")])
+        self.assertEqual(errors, [ErrorInfo(1, 1, "", ErrorType.TERMINAL,
+            "Train/test overlap: `` passed to `` shares rows with the model's training data, so evaluation scores are inflated.")])
 
         dfs1.frames['x_selected'][0].source = 'x_selected2'
         errors = []

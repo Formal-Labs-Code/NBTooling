@@ -14,7 +14,7 @@ class Usage(Enum):
     NONE = auto()
 
 class DataLeakAbstractDomain:
-    def __init__(self, dfs: DataFrameSet = DataFrameSet(), taint: bool = False, usages: set[Usage] = set[Usage](), dull=False, fitted_from: tuple[str, bool] = None) -> None:
+    def __init__(self, dfs: DataFrameSet = DataFrameSet(), taint: bool = False, usages: set[Usage] = set[Usage](), dull=False, fitted_from: tuple = None, taint_origin: dict = None) -> None:
         '''
         Abstract domain that keeps track of data frames, if those data frames are tainted,
         if any data frames have been used for testing or training
@@ -24,7 +24,9 @@ class DataLeakAbstractDomain:
         self.taint: bool = taint
         self.usages: set[Usage] = usages
         # Set on a RECEIVER variable (e.g. "scaler" in `scaler.fit(X)`),
-        # not on an assigned result - (source_name, was_full_rows_at_fit_time).
+        # not on an assigned result - (source_name, was_full_rows_at_fit_time,
+        # fit_origin), fit_origin being the taint_origin-shaped location of
+        # the fit() call itself.
         # Consulted by DataLeakAnalysis.transform_transformer to tell "fit on
         # the whole, unsplit dataset, transform() separately per split" (a
         # real leak) apart from "fit on an already-split subset, transform()
@@ -32,11 +34,18 @@ class DataLeakAbstractDomain:
         # identical as a call sequence, so this is what actually
         # distinguishes them. See dataleak_analysis.py's
         # _record_fit_on_receiver/transform_transformer docstrings.
-        self.fitted_from: tuple[str, bool] = fitted_from
+        self.fitted_from: tuple = fitted_from
+        # Where the taint was introduced: {"cell", "line", "call", "variable"}
+        # of the preprocessing call (fit_transform, or the fit() behind a
+        # leaky transform()). Provenance only - deliberately left out of
+        # __eq__ so it never affects fixpoint convergence.
+        self.taint_origin: dict = taint_origin
 
-    def apply_taint(self, new_source: str) -> DataLeakAbstractDomain:
+    def apply_taint(self, new_source: str, origin: dict = None) -> DataLeakAbstractDomain:
         self.taint = True
         self.dfs.rename_sources(new_source)
+        if origin:
+            self.taint_origin = origin
         return self
 
     def __eq__(self, other: DataLeakAbstractDomain) -> bool:
@@ -66,21 +75,45 @@ class DataLeakAbstractState(AbstractState):
 
         for test_dfs, train_dfs in product(test_domain, train_domain):
             if test_dfs.dfs.cartesian_overlap(train_dfs.dfs):
-                if isinstance(node, AssignmentNode):
-                    if isinstance(node.ast_node, ast.Call) and node.ast_node.args and isinstance(node.ast_node.args[0], ast.Name):
-                        errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, node.ast_node.args[0].id, ErrorType.TERMINAL, "Training model with data leak."))
-                else:
-                    errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, node.label, ErrorType.TERMINAL, "Training model with data leak."))
+                label, call = self._sink_of(node)
+                if label is not None:
+                    message = (f"Train/test overlap: `{label}` passed to `{call}` shares rows with the "
+                               f"model's training data, so evaluation scores are inflated.")
+                    errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, label, ErrorType.TERMINAL, message))
                 return errors
             
             if test_dfs.dfs.cartesian_overlap(train_dfs.dfs, weak=True) and test_dfs.taint and train_dfs.taint:
-                if isinstance(node, AssignmentNode):
-                    if isinstance(node.ast_node, ast.Call):
-                        errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, node.ast_node.args[0].id, ErrorType.TERMINAL, "Training model with data leak."))
-                else:
-                    errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, node.label, ErrorType.TERMINAL, "Training model with data leak."))
+                label, call = self._sink_of(node)
+                if label is not None:
+                    origin = test_dfs.taint_origin or train_dfs.taint_origin
+                    if origin:
+                        cause = (f"`{origin['call']}` (cell {origin['cell']}, line {origin['line']}) ran on "
+                                 f"unsplit `{origin['variable']}` before the train/test split")
+                    else:
+                        cause = "a preprocessing step ran on the data before the train/test split"
+                    message = (f"Preprocessing leak: `{label}` passed to `{call}` is contaminated because "
+                               f"{cause}, so test-set statistics leak into the model.")
+                    errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, label, ErrorType.TERMINAL, message, source=origin))
                 return errors
         return errors
+
+    @staticmethod
+    def _sink_of(node: Node) -> tuple:
+        '''
+        (variable, call name) at the node completing the train/test pair, e.g.
+        ("X_test", "predict"). Variable is None when the call's first argument
+        isn't a plain name - no error is reported for that shape.
+        '''
+        if not isinstance(node, AssignmentNode):
+            return node.label, node.label
+
+        call = getattr(node, "func_name", None)
+        if isinstance(node.ast_node, ast.Call):
+            func = node.ast_node.func
+            call = call or (func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None))
+            if node.ast_node.args and isinstance(node.ast_node.args[0], ast.Name):
+                return node.ast_node.args[0].id, call
+        return None, call
 
     def aug_join(self, other: DataLeakAbstractState) -> DataLeakAbstractState:
         '''
@@ -97,7 +130,8 @@ class DataLeakAbstractState(AbstractState):
                 self.state[other_var].taint | other_domain.taint,
                 self.state[other_var].usages.union(other_domain.usages),
                 self.state[other_var].dull | other_domain.dull,
-                self.state[other_var].fitted_from or other_domain.fitted_from
+                self.state[other_var].fitted_from or other_domain.fitted_from,
+                self.state[other_var].taint_origin or other_domain.taint_origin
             )
 
         return self

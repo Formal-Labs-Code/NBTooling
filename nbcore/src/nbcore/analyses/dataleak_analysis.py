@@ -45,7 +45,7 @@ class DataLeakAnalysis(Analysis):
         '''
         if isinstance(cfg_node, RestoreNode):
             other: DataLeakAbstractDomain = a_state.state[cfg_node.right_hand_side[0]]
-            a_state.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull)
+            a_state.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin)
 
         if not cfg_node.ast_node:
             return a_state
@@ -83,20 +83,20 @@ class DataLeakAnalysis(Analysis):
                 self.reset_transformer(cfg_node, as_transformed)
 
             elif func_name in self.taintKB:
-                self.taint_transformer(cfg_node, as_transformed)
+                self.taint_transformer(cfg_node, as_transformed, cell_IR)
 
             elif func_name in self.trainKB:
                 # Should be visitor ideally.
                 x_kw = self._extract_kw(cfg_node, 'x')
                 x = x_kw[0].value.id if x_kw else None
                 self._clone_assign(as_transformed, cfg_node, override_source=x).usages.add(Usage.TRAIN)
-                self._record_fit_on_receiver(cfg_node, as_transformed)
+                self._record_fit_on_receiver(cfg_node, as_transformed, cell_IR)
 
             elif func_name in self.testKB:
                 self._clone_assign(as_transformed, cfg_node).usages.add(Usage.TEST)
 
             elif func_name in self.transformKB:
-                self.transform_transformer(cfg_node, as_transformed)
+                self.transform_transformer(cfg_node, as_transformed, cell_IR)
 
             else:
                 # All other function calls not related to Data Leak.
@@ -202,7 +202,7 @@ class DataLeakAnalysis(Analysis):
         as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(dfs, False, set[Usage]())
 
 
-    def taint_transformer(self, cfg_node, as_transformed):
+    def taint_transformer(self, cfg_node, as_transformed, cell_IR):
         '''
         Handles of variations of an argument (first positional).
         E.g. plain dataset name, attribute like df.values etc...
@@ -229,10 +229,18 @@ class DataLeakAnalysis(Analysis):
             new_source = arg.value.id
                 
             
-        self._clone_assign(as_transformed, cfg_node, override_source= new_source).apply_taint(new_source= new_source)
+        origin = self._origin(cfg_node, cell_IR, new_source)
+        self._clone_assign(as_transformed, cfg_node, override_source= new_source).apply_taint(new_source= new_source, origin=origin)
 
 
-    def _record_fit_on_receiver(self, cfg_node, as_transformed) -> None:
+    def _origin(self, cfg_node, cell_IR, variable) -> dict:
+        '''
+        Location of a taint-introducing call, reported as a finding's source.
+        '''
+        return {"cell": cell_IR.cell_id, "line": cfg_node.line_number, "call": cfg_node.func_name, "variable": variable}
+
+
+    def _record_fit_on_receiver(self, cfg_node, as_transformed, cell_IR) -> None:
         '''
         When a trainKB call (.fit()/.train()) is a method call on a
         receiver object - e.g. `scaler.fit(X)`, as opposed to a bare/
@@ -277,10 +285,10 @@ class DataLeakAnalysis(Analysis):
         if receiver_domain is None:
             receiver_domain = DataLeakAbstractDomain(dull=True)
             as_transformed.state[receiver] = receiver_domain
-        receiver_domain.fitted_from = (arg_name, was_full)
+        receiver_domain.fitted_from = (arg_name, was_full, self._origin(cfg_node, cell_IR, arg_name))
 
 
-    def transform_transformer(self, cfg_node, as_transformed) -> None:
+    def transform_transformer(self, cfg_node, as_transformed, cell_IR) -> None:
         '''
         Handles `receiver.transform(arg)`.
 
@@ -309,11 +317,13 @@ class DataLeakAnalysis(Analysis):
         receiver_domain = as_transformed.state.get(receiver) if receiver else None
 
         if receiver_domain and receiver_domain.fitted_from and receiver_domain.fitted_from[1]:
-            new_source = receiver_domain.fitted_from[0]
-            self._clone_assign(as_transformed, cfg_node, override_source=new_source).apply_taint(new_source=new_source)
+            # Rows come from THIS call's argument (each split keeps its own
+            # range); only the source name is the shared fit source.
+            new_source, _, fit_origin = receiver_domain.fitted_from
+            self._clone_assign(as_transformed, cfg_node).apply_taint(new_source=new_source, origin=fit_origin)
             return
 
-        self.taint_transformer(cfg_node, as_transformed)
+        self.taint_transformer(cfg_node, as_transformed, cell_IR)
 
 
     def iloc_transformer(self, cfg_node, as_transformed):
@@ -436,7 +446,7 @@ class DataLeakAnalysis(Analysis):
             source_arg = cfg_node.ast_node.args[arg_pos].id
 
         other: DataLeakAbstractDomain = as_transformed.state[source_arg]
-        as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull)
+        as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin)
 
         return as_transformed.state[cfg_node.left_hand_side]
 

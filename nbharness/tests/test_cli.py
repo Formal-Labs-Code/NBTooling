@@ -12,7 +12,7 @@ class TestNBHarnessCLI(unittest.TestCase):
                 start=0,
                 level=10
             )
-        self.assertEqual(results_true, '[{"cell_id":4,"errors":[{"line":2,"label":"X_selected_test", "error_type":"ErrorType.TERMINAL", "message":"Training model with data leak."}],"path":[0, 1, 2, 3, 4]}]')
+        self.assertEqual(results_true, '[{"cell_id":4,"errors":[{"line":2,"label":"X_selected_test", "error_type":"ErrorType.TERMINAL", "message":"Preprocessing leak: `X_selected_test` passed to `lr.predict` is contaminated because `min_max_scaler.fit_transform` (cell 1, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model.", "source":{"cell": 1, "line": 3, "call": "min_max_scaler.fit_transform", "variable": "X"}}],"path":[0, 1, 2, 3, 4]}]')
         results_false = nbharness(
                 filename=None,
                 notebook=read_json(TEST_RES_PATH + "dataleak_false.ipynb"),
@@ -38,7 +38,7 @@ class TestNBHarnessCLI(unittest.TestCase):
                 start=0,
                 level=10
             )
-        self.assertEqual(results_true, '[{"cell_id":4,"errors":[{"line":1,"label":"X_test", "error_type":"ErrorType.TERMINAL", "message":"Training model with data leak."}],"path":[0, 1, 2, 3, 4]}]')
+        self.assertEqual(results_true, '[{"cell_id":4,"errors":[{"line":1,"label":"X_test", "error_type":"ErrorType.TERMINAL", "message":"Preprocessing leak: `X_test` passed to `lr.predict` is contaminated because `smote.fit_resample` (cell 1, line 5) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model.", "source":{"cell": 1, "line": 5, "call": "smote.fit_resample", "variable": "X"}}],"path":[0, 1, 2, 3, 4]}]')
         results_false = nbharness(
                 filename=None,
                 notebook=read_json(TEST_RES_PATH + "dataleak_smote_false.ipynb"),
@@ -62,7 +62,7 @@ class TestNBHarnessCLI(unittest.TestCase):
                 start=0,
                 level=10
             )
-        self.assertEqual(results_true, '[{"cell_id":4,"errors":[{"line":2,"label":"X_test", "error_type":"ErrorType.TERMINAL", "message":"Training model with data leak."}],"path":[0, 1, 2, 3, 4]}]')
+        self.assertEqual(results_true, '[{"cell_id":4,"errors":[{"line":2,"label":"X_test", "error_type":"ErrorType.TERMINAL", "message":"Preprocessing leak: `X_test` passed to `lr.score` is contaminated because `scaler.fit_transform` (cell 1, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model.", "source":{"cell": 1, "line": 3, "call": "scaler.fit_transform", "variable": "X"}}],"path":[0, 1, 2, 3, 4]}]')
         results_false = nbharness(
                 filename=None,
                 notebook=read_json(TEST_RES_PATH + "dataleak_readexcel_score_false.ipynb"),
@@ -95,7 +95,7 @@ class TestNBHarnessCLI(unittest.TestCase):
                 start=0,
                 level=10
             )
-        self.assertEqual(results_true, '[{"cell_id":5,"errors":[{"line":1,"label":"X_test_scaled", "error_type":"ErrorType.TERMINAL", "message":"Training model with data leak."}],"path":[0, 1, 2, 3, 4, 5]}]')
+        self.assertEqual(results_true, '[{"cell_id":5,"errors":[{"line":1,"label":"X_test_scaled", "error_type":"ErrorType.TERMINAL", "message":"Preprocessing leak: `X_test_scaled` passed to `lr.predict` is contaminated because `scaler.fit` (cell 2, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model.", "source":{"cell": 2, "line": 3, "call": "scaler.fit", "variable": "X"}}],"path":[0, 1, 2, 3, 4, 5]}]')
         results_false = nbharness(
                 filename=None,
                 notebook=read_json(TEST_RES_PATH + "dataleak_fit_transform_split_false.ipynb"),
