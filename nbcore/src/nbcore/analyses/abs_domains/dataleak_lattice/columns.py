@@ -7,7 +7,7 @@ class Columns:
     Column domain with defined join and meet operators and appropriate reduction operators.
     """
 
-    def __init__(self, init_columns: dict[str, bool] = dict(), all = False):
+    def __init__(self, init_columns: dict[str, bool] = None, all = False):
         '''
         Here we're "abusing" the dictionary instead of set which helps because of the need
         of internal reduction operator.
@@ -17,7 +17,7 @@ class Columns:
         As in theoretical model, complete absence of mapping for some column means that column's
         presence status is unknown (could be either of two)
         '''
-        self.columns: dict[str, bool] = init_columns
+        self.columns: dict[str, bool] = init_columns if init_columns is not None else dict()
         self.all = all
 
     def size(self) -> int:

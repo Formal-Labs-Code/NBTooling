@@ -18,7 +18,7 @@ class Runner:
         self.error_states: list[AbstractState] = list()
         self.cells_summary_map: dict[int, IntermediateRepresentations] = cells_summary_map
     
-    def intra_fixpoint_runner(self, cell_IR: IntermediateRepresentations, analysis: Analysis, as_init: AbstractState, K = None, imports = set()):
+    def intra_fixpoint_runner(self, cell_IR: IntermediateRepresentations, analysis: Analysis, as_init: AbstractState, K = None, imports = None):
         cfg: CFG = cell_IR.CFG
         node_state_map = defaultdict(type(as_init))
         transform_order: FifoQueue = FifoQueue()

@@ -14,15 +14,15 @@ class Usage(Enum):
     NONE = auto()
 
 class DataLeakAbstractDomain:
-    def __init__(self, dfs: DataFrameSet = DataFrameSet(), taint: bool = False, usages: set[Usage] = set[Usage](), dull=False, fitted_from: tuple = None, taint_origin: dict = None, usage_sites: dict = None) -> None:
+    def __init__(self, dfs: DataFrameSet = None, taint: bool = False, usages: set[Usage] = None, dull=False, fitted_from: tuple = None, taint_origin: dict = None, usage_sites: dict = None) -> None:
         '''
         Abstract domain that keeps track of data frames, if those data frames are tainted,
         if any data frames have been used for testing or training
         '''
         self.dull = dull
-        self.dfs: DataFrameSet = dfs
+        self.dfs: DataFrameSet = dfs if dfs is not None else DataFrameSet()
         self.taint: bool = taint
-        self.usages: set[Usage] = usages
+        self.usages: set[Usage] = usages if usages is not None else set[Usage]()
         # Set on a RECEIVER variable (e.g. "scaler" in `scaler.fit(X)`),
         # not on an assigned result - (source_name, was_full_rows_at_fit_time,
         # fit_origin), fit_origin being the taint_origin-shaped location of

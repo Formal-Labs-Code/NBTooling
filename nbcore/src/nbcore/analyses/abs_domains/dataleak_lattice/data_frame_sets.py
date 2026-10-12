@@ -14,13 +14,13 @@ o_ -> "of other" <=> (attr of a non self object)
 '''
 
 class DataFrameSet:
-    def __init__(self, init_frames : dict[str, list[DataFrame]] = dict()) -> None:
+    def __init__(self, init_frames : dict[str, list[DataFrame]] = None) -> None:
         '''
         Mapping source names to matching Data Frame Lists because of possible Data Frames
         with same source but disjoint subdomains (e.g. disjoint row intervals), but still having solid
         performance thanks to dict lookup time.
         '''
-        self.frames : dict[str, list[DataFrame]] = init_frames
+        self.frames : dict[str, list[DataFrame]] = init_frames if init_frames is not None else dict()
 
     def constraint(self, c_columns: Columns, c_rows: Rows): 
         for l_df in self.frames.values(): 
