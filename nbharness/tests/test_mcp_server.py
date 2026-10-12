@@ -31,6 +31,36 @@ class TestNBHarnessMCPServer(unittest.TestCase):
     def test_analyze_reports_no_findings_for_clean_notebook(self):
         self.assertEqual(analyze(read_json(TEST_RES_PATH + "dataleak_false.ipynb")), [])
 
+    def test_analyze_script_path(self):
+        result = analyze(TEST_RES_PATH + "dataleak_script_flat_true.py")
+        self.assertEqual(len(result), 1)
+        finding = result[0]
+        self.assertIsNone(finding["path"])  # single-cell script: no cell path
+        self.assertEqual(
+            finding["locations"],
+            [{"role": "sink", "cell": 0, "line": 17, "file_line": 17},
+             {"role": "source", "cell": 0, "line": 11, "file_line": 11}],
+        )
+
+    def test_analyze_script_with_cells_starts_at_first_code_cell(self):
+        result = analyze(TEST_RES_PATH + "dataleak_script_cells_true.py")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["path"], [1, 2, 3, 4, 5])
+        self.assertEqual(result[0]["locations"][0]["file_line"], 33)
+
+    def test_analyze_script_source_string_and_object(self):
+        with open(TEST_RES_PATH + "dataleak_script_flat_true.py") as f:
+            src = f.read()
+        self.assertEqual(analyze(src), analyze({"script": src}))
+        self.assertEqual(len(analyze(src)), 1)
+
+    def test_analyze_notebook_starting_with_markdown(self):
+        notebook = read_json(TEST_RES_PATH + "dataleak_true.ipynb")
+        notebook["cells"].insert(0, {"cell_type": "markdown", "metadata": {}, "source": ["# Title"]})
+        result = analyze(notebook)
+        self.assertEqual(len(result), 1)
+        self.assertTrue(result[0]["message"].startswith("Preprocessing leak"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,11 @@
+import json
 from argparse import ArgumentParser
 
 from nbcore.events import RunBatchEvent
 from nbcore.resource_utils.utils import load_notebook, read_json
+from nbcore.resource_utils.script_loading import (
+    cell_start_lines, file_line, first_code_cell, has_cell_markers, is_script, script_to_notebook,
+)
 from nbcore.analyses.dataleak_analysis import DATA_LEAK
 
 from .analyses.idle_cell_analysis import IDLE
@@ -15,24 +19,69 @@ from .session_factory import new_session
 # (and STALE/IDLE/ISOLATED/--detect-stale-cells) actually lives now.
 
 
+# Analyses about notebook execution state (which cells ran, in what order) -
+# meaningless for a script without cell markers, which is one cell run top
+# to bottom.
+NOTEBOOK_ONLY_ANALYSES = (STALE, IDLE, ISOLATED)
+
+
+def read_input(filename, notebook):
+    """The notebook dict for a .ipynb/.py file or an already-loaded dict; a
+    .py script is converted with script_to_notebook (one cell per `# %%` /
+    `# In[ ]:` marker, or a single cell without markers)."""
+    assert not (filename and notebook)
+    if notebook is not None:
+        return notebook
+    assert filename
+    if filename.endswith(".py"):
+        with open(filename, encoding="utf-8") as f:
+            return script_to_notebook(f.read())
+    return read_json(filename)
+
+
 def _load_notebook(filename, notebook):
     session = new_session()
-    assert not (filename and notebook)
-    if notebook is None:
-        assert filename
-        notebook = read_json(filename)
+    notebook = read_input(filename, notebook)
     session.load(load_notebook(notebook["cells"]))
     return session
 
 
+def add_file_lines(raw_results: str, notebook: dict) -> str:
+    """For script input: adds `file_line` (the line in the .py file) to each
+    error, and to its `source` when it has one."""
+    starts = cell_start_lines(notebook)
+    if not raw_results or not starts:
+        return raw_results
+    entries = json.loads(raw_results)
+    for entry in entries:
+        for err in entry.get("errors", []):
+            err["file_line"] = file_line(starts, entry.get("cell_id"), err.get("line"))
+            source = err.get("source")
+            if isinstance(source, dict):
+                source["file_line"] = file_line(starts, source.get("cell"), source.get("line"))
+    return json.dumps(entries)
+
+
 def nbharness(filename, notebook, analyses, start, level=5):
-    session = _load_notebook(filename, notebook)
+    notebook = read_input(filename, notebook)
+    script = is_script(notebook)
+    if script and not has_cell_markers(notebook):
+        notebook_only = [a for a in analyses if a in NOTEBOOK_ONLY_ANALYSES]
+        if notebook_only:
+            raise ValueError(
+                f"{', '.join(notebook_only)} only applies to notebooks or scripts with "
+                "`# %%` cell markers; this script has none, so it is a single cell."
+            )
+    if script and start == 0:
+        start = first_code_cell(notebook)
+
+    session = _load_notebook(None, notebook)
     session.level = level
     session.add_analyses(analyses)
     event = RunBatchEvent(start)
     results = session.execute_event(event).dumps(True)
 
-    return results
+    return add_file_lines(results, notebook) if script else results
 
 
 def detect_bugs(filename, notebook, scope, cell_index, context_mode="deps", finding_types=None):
@@ -93,7 +142,7 @@ def _build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="NBHarness - live and batch notebook diagnostics")
     group = parser.add_mutually_exclusive_group(required=True)
 
-    group.add_argument("-f", "--filename", type=str, help='Filename of notebook.')
+    group.add_argument("-f", "--filename", type=str, help='Notebook (.ipynb) or Python script (.py) file.')
     group.add_argument("-n", "--notebook", type=str, help='Notebook json string.')
     parser.add_argument("-a", "--analyses", nargs="+", type=str, default=[], help='Analyses to perform.')
     parser.add_argument("-s", "--start", type=int, default=0, help='Starting cell ID (default is 0).')
@@ -156,7 +205,10 @@ def main():
         print(results)
         return
 
-    results = nbharness(args.filename, args.notebook, args.analyses, args.start, args.level)
+    try:
+        results = nbharness(args.filename, args.notebook, args.analyses, args.start, args.level)
+    except ValueError as exc:
+        raise SystemExit(f"Error: {exc}")
     print(results)
 
 if __name__ == "__main__":

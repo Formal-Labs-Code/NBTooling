@@ -7,6 +7,8 @@ from typing import Any
 from nbcore.analyses.dataleak_analysis import DATA_LEAK
 from nbcore.resource_utils.utils import read_json
 
+from nbcore.resource_utils.script_loading import first_code_cell, has_cell_markers, is_script, script_to_notebook
+
 from .cli import nbharness
 
 try:
@@ -35,17 +37,25 @@ def _coerce_notebook(notebook: Any) -> dict[str, Any]:
                 raise ValueError("Notebook JSON string is not valid JSON.") from exc
             if not isinstance(payload, dict):
                 raise TypeError("Notebook JSON payload must decode to a dict/object.")
-            return payload
+            return _coerce_notebook(payload)
+
+        if "\n" in raw:
+            # Not JSON, and no path contains a newline: Python script source.
+            return script_to_notebook(str(notebook))
 
         candidate = Path(raw)
         if not candidate.exists():
             raise FileNotFoundError(f"Notebook path does not exist: {raw}")
+        if candidate.suffix == ".py":
+            return script_to_notebook(candidate.read_text(encoding="utf-8"))
         return read_json(str(candidate))
 
     if hasattr(notebook, "read"):
         return json.load(notebook)
 
     if isinstance(notebook, dict):
+        if isinstance(notebook.get("script"), str) and "cells" not in notebook:
+            return script_to_notebook(notebook["script"])
         return notebook
 
     raise TypeError(
@@ -53,7 +63,14 @@ def _coerce_notebook(notebook: Any) -> dict[str, Any]:
     )
 
 
-def _normalize_findings(raw_result: str) -> list[dict[str, Any]]:
+def _location(role: str, cell, line, file_line=None) -> dict[str, Any]:
+    location = {"role": role, "cell": cell, "line": line}
+    if file_line is not None:
+        location["file_line"] = file_line
+    return location
+
+
+def _normalize_findings(raw_result: str, single_cell_script: bool = False) -> list[dict[str, Any]]:
     if not raw_result:
         return []
 
@@ -71,15 +88,16 @@ def _normalize_findings(raw_result: str) -> list[dict[str, Any]]:
             continue
 
         cell_id = entry.get("cell_id")
-        path = entry.get("path") or None
+        # A script without cell markers is one cell: a cell path says nothing.
+        path = None if single_cell_script else (entry.get("path") or None)
         for err in entry.get("errors") or []:
             if not isinstance(err, dict):
                 continue
 
             source = err.get("source")
-            locations = [{"role": "sink", "cell": cell_id, "line": err.get("line")}]
+            locations = [_location("sink", cell_id, err.get("line"), err.get("file_line"))]
             if source:
-                locations.append({"role": "source", "cell": source.get("cell"), "line": source.get("line")})
+                locations.append(_location("source", source.get("cell"), source.get("line"), source.get("file_line")))
 
             findings.append(
                 {
@@ -116,10 +134,10 @@ def _analyze_impl(notebook: Any) -> list[dict[str, Any]]:
         filename=None,
         notebook=payload,
         analyses=[DATA_LEAK],
-        start=0,
+        start=first_code_cell(payload),
         level=10,
     )
-    return _normalize_findings(raw_result)
+    return _normalize_findings(raw_result, single_cell_script=is_script(payload) and not has_cell_markers(payload))
 
 
 def _verify_impl(notebook: Any) -> dict[str, Any]:
@@ -154,7 +172,12 @@ def _verify_impl(notebook: Any) -> dict[str, Any]:
 
 @mcp.tool()
 def analyze(notebook: str | dict[str, Any]) -> list[dict[str, Any]]:
-    """Analyze a notebook and return leakage findings in the static-analysis schema."""
+    """Analyze a notebook or Python script and return leakage findings in the static-analysis schema.
+
+    `notebook` is a .ipynb or .py path, notebook JSON (string or object),
+    Python script source, or {"script": "<source>"}. A script is split into
+    cells at `# %%` / `# In[ ]:` markers, or is a single cell without them;
+    script locations also carry `file_line`, the line in the script."""
     return _analyze_impl(notebook)
 
 

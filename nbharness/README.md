@@ -35,8 +35,24 @@ The server exposes the primary tool `analyze`. The `verify` helper remains as
 an optional, best-effort runtime sanity check and is not the core NBHarness
 contract.
 
-The `analyze` tool accepts either a notebook path or a raw notebook
-dict/JSON payload and returns one finding per raw analyzer error.
+The `analyze` tool accepts a notebook (`.ipynb` path, or a notebook
+dict/JSON payload) or a Python script (`.py` path, raw source, or
+`{"script": "<source>"}`), and returns one finding per raw analyzer error.
+
+## Python scripts
+
+Both the CLI (`nbharness -f script.py -a "Data Leak Analysis"`) and the
+MCP `analyze` tool accept `.py` files:
+
+- A script with cell markers - `# %%` (VS Code / Jupytext; `# %% [markdown]`
+  sections are skipped) or `# In[ ]:` (Jupyter's `.py` export) - is split
+  into one cell per marker and analyzed exactly like a notebook.
+- A script without markers is a single cell, analyzed top to bottom. Only
+  the data-leak analysis applies; the stale/idle/isolated analyses are about
+  notebook execution state and are rejected for such scripts.
+
+Script results add `file_line` (the line in the `.py` file) next to each
+cell-relative `line`, for the sink and for the finding's source.
 
 Example direct smoke-check:
 
