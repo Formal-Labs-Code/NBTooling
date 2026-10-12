@@ -145,14 +145,15 @@ data:
 
 ## Known simplifications (not gaps, but worth knowing about)
 
-- `def_use.py`'s `DefUseChains` scopes function and class bodies: a
-  parameter or local only binds inside its body, and free variables of the
-  body count as reads of the cell (so a parameter shadowing a global no
-  longer hides the cell's dependency on that global). Two simplifications
-  remain: comprehensions are flat (their loop variables bind at the
-  enclosing level), and binding is order-insensitive within a scope, so
-  `x = f(x)` doesn't count `x` as unbound even though the cell reads a
-  previous `x`.
+- `def_use.py`'s `DefUseChains` computes a cell's inputs as the names
+  live at the entry of its CFG (`liveness.py`), so they respect statement
+  order, branches, loops and inlined calls: `x = f(x)` reads an earlier
+  `x`, and a name bound on only one branch is still an input. What the CFG
+  doesn't carry is handled cell-wide instead: imports (no CFG node) bind
+  everywhere, `global` assignments in a function count as cell bindings,
+  and free variables of def/class bodies (opaque single nodes) are inputs
+  unless the cell binds them somewhere. `except E as e` is read/bound at
+  the TryNode, and comprehensions are flat.
 - `try`/`except` control flow connects the `TryNode` itself to each
   handler (approximating "the body might raise") rather than simple_cfg's
   finer "any statement in the body can raise" edges. An

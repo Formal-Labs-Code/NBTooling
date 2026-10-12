@@ -59,6 +59,47 @@ class TestDefUse(unittest.TestCase):
         self.assertIn("z", duc.unbound_names)
         self.assertNotIn("x", duc.unbound_names)
 
+    def test_read_before_rebind_is_unbound(self):
+        # e.g. `data = len(data)`: the cell reads the previous cell's value
+        duc, _ = analyze("X = X.fillna(0)\n")
+        self.assertEqual(duc.unbound_names, {"X"})
+
+    def test_read_before_later_assignment_is_unbound(self):
+        duc, _ = analyze("print(X)\nX = 1\n")
+        self.assertEqual(duc.unbound_names, {"X"})
+
+    def test_read_after_assignment_is_not_unbound(self):
+        duc, _ = analyze("X = 1\nprint(X)\n")
+        self.assertEqual(duc.unbound_names, set())
+
+    def test_name_bound_on_only_one_branch_is_unbound(self):
+        duc, _ = analyze("if c:\n    X = 1\nprint(X)\n")
+        self.assertEqual(duc.unbound_names, {"c", "X"})
+
+    def test_name_bound_on_every_branch_is_not_unbound(self):
+        duc, _ = analyze("if c:\n    X = 1\nelse:\n    X = 2\nprint(X)\n")
+        self.assertEqual(duc.unbound_names, {"c"})
+
+    def test_loop_accumulator_is_unbound(self):
+        duc, _ = analyze("for i in r:\n    total = total + i\n")
+        self.assertEqual(duc.unbound_names, {"r", "total"})
+
+    def test_augmented_assignment_reads_its_target(self):
+        duc, _ = analyze("x += 1\n")
+        self.assertEqual(duc.unbound_names, {"x"})
+
+    def test_name_bound_in_try_body_is_unbound_in_handler(self):
+        duc, _ = analyze("try:\n    z = g(1)\nexcept E as e:\n    w = (z, e)\n")
+        self.assertEqual(duc.unbound_names, {"g", "E", "z"})
+
+    def test_with_target_is_bound_for_its_body(self):
+        duc, _ = analyze("with open(p) as fh:\n    data = fh.read()\n")
+        self.assertEqual(duc.unbound_names, {"p"})
+
+    def test_inlined_call_reads_globals_at_the_call_site(self):
+        duc, _ = analyze("def f(a):\n    return a + scale\nscale = 2\nx = f(1)\n")
+        self.assertEqual(duc.unbound_names, set())
+
     def test_param_shadowing_a_global_does_not_hide_the_global(self):
         # rtests/test7.ipynb's shape: `model` is a parameter of test_model,
         # but the call's `model` argument is the module-level one from an

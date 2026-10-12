@@ -156,6 +156,24 @@ class TestNBHarnessCLI(unittest.TestCase):
             "scores are inflated.")
         self.assertEqual(err["source"], {"cell": 2, "line": 5, "call": "model.fit",
                                          "variable": "X_local_train", "function": "train_model"})
+    def test_dataleak_rebind_before_split(self):
+        """
+        `X = scaler.fit_transform(X)` reads and rebinds X. def_use used to
+        cancel the read against the binding, giving the cell no inputs, so
+        the runner never visited it and the preprocessing leak was missed.
+        """
+        results = json.loads(nbharness(
+                filename=None,
+                notebook=read_json(TEST_RES_PATH + "dataleak_rebind_before_split_true.ipynb"),
+                analyses=[DATA_LEAK],
+                start=0,
+                level=10
+            ))
+        self.assertEqual(len(results), 1)
+        err = results[0]["errors"][0]
+        self.assertEqual((results[0]["cell_id"], err["line"], err["label"]), (4, 3, "X_test"))
+        self.assertTrue(err["message"].startswith("Preprocessing leak:"))
+        self.assertEqual(err["source"], {"cell": 2, "line": 2, "call": "scaler.fit_transform", "variable": "X"})
 
 if __name__ == "__main__":
     unittest.main()

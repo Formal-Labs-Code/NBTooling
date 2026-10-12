@@ -2,16 +2,20 @@
 Replacement for beniget.DefUseChains + IR/visitors/assigns_visitor.py's
 AssignsVisitor, ported onto our own AST.
 
-`DefUseChains` is scope-aware for function and class bodies: a `def` or
-`class` binds only its own name in the cell, while its parameters and local
-assignments stay inside its body. Names a body reads without binding them
-itself (free variables) count as reads at the enclosing level, as do
-decorators, default values, annotations and class bases, which Python
-evaluates there. `global x` makes an assignment to `x` inside a function
-bind `x` at cell level. Comprehensions are still treated flat (their loop
-variables bind at the enclosing level), and binding is order-insensitive
-within each scope: `x = f(x)` both reads and binds `x`, so `x` is not
-unbound. See parser/README.md.
+`DefUseChains` computes a cell's inputs flow-sensitively: the names live at
+the entry of the cell's CFG, i.e. read on some path before the cell binds
+them (see liveness.py) - so `X = X.fillna(0)` reads an earlier `X`, and a
+name bound on only one branch of an `if` is still an input.
+
+Three things the CFG doesn't carry are handled here, cell-wide and
+order-insensitively instead:
+  * imports (no CFG node) bind their names everywhere in the cell;
+  * names a function assigns under `global` count as bound by the cell;
+  * def/class bodies are opaque CFG nodes, so their free variables are
+    inputs unless the cell binds them somewhere. A body is its own scope:
+    its parameters and locals never bind at cell level, and decorators,
+    defaults, annotations and bases are read where the def/class appears.
+Comprehensions are flat: their loop variables don't count as reads.
 
 What actually gets consumed downstream is `unbound_names` -- identifiers
 used in this cell that resolve to *neither* a binding in this cell nor a
@@ -22,6 +26,7 @@ import).
 import builtins as _builtins_module
 
 from . import ast_nodes as n
+from .liveness import live_at_entry
 
 # beniget resolves names against Python's builtins scope, so e.g. `print` in
 # `print(x)` is never "unbound" even though it's never assigned in the cell.
@@ -35,15 +40,23 @@ class DefUseChains:
     def __init__(self):
         self.unbound_names = set()
 
-    def visit(self, module):
-        bound, used = set(), set()
-        self._collect([module], bound, used, set(), bound)
-        self.unbound_names = used - bound - _BUILTIN_NAMES
+    def visit(self, module, cfg=None):
+        if cfg is None:
+            from .cfg_builder import get_cfg
+            cfg = get_cfg(module, None)
+        bound, body_free = set(), set()
+        self._imported, self._global_bound = set(), set()
+        self._collect([module], bound, set(), set(), bound, nested_into=body_free)
+        live = {name for name in live_at_entry(cfg) if not name.startswith("~")}
+        self.unbound_names = (
+            (live - self._imported - self._global_bound) | (body_free - bound)
+        ) - _BUILTIN_NAMES
         return self
 
-    def _collect(self, roots, bound, used, declared_global, cell_bound):
+    def _collect(self, roots, bound, used, declared_global, cell_bound, nested_into=None):
         """Bindings/reads of one scope into `bound`/`used`, without
-        descending into nested function or class bodies (see _nested)."""
+        descending into nested function or class bodies (see _nested).
+        At cell level, nested bodies' free variables go to `nested_into`."""
         stack = list(roots)
         while stack:
             node = stack.pop()
@@ -57,14 +70,14 @@ class DefUseChains:
                 stack.extend(a.annotation for a in params if a.annotation is not None)
                 if node.returns is not None:
                     stack.append(node.returns)
-                self._nested(node.body, {a.arg for a in params}, used, cell_bound)
+                self._nested(node.body, {a.arg for a in params}, used if nested_into is None else nested_into, cell_bound)
                 continue
             if isinstance(node, n.ClassDef):
                 bound.add(node.name)
                 stack.extend(node.bases)
                 stack.extend(node.keywords)
                 stack.extend(node.decorator_list)
-                self._nested(node.body, set(), used, cell_bound)
+                self._nested(node.body, set(), used if nested_into is None else nested_into, cell_bound)
                 continue
             if isinstance(node, n.Name):
                 if isinstance(node.ctx, n.Store):
@@ -77,6 +90,8 @@ class DefUseChains:
                 for alias in node.names:
                     if alias.name != "*":
                         bound.add(alias.asname or alias.name.split(".")[0])
+                        if bound is cell_bound:
+                            self._imported.add(alias.asname or alias.name.split(".")[0])
             elif isinstance(node, n.ExceptHandler):
                 if node.name:
                     bound.add(node.name)
@@ -89,6 +104,7 @@ class DefUseChains:
         bound, used, declared_global = set(params), set(), set()
         self._collect(body, bound, used, declared_global, cell_bound)
         cell_bound.update(bound & declared_global)
+        self._global_bound.update(bound & declared_global)
         enclosing_used.update(used - (bound - declared_global))
 
 

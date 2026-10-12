@@ -34,7 +34,7 @@ class IntermediateRepresentations:
 
     def update_assigns(self):
         defUseChains = DefUseChains()
-        defUseChains.visit(self.AST)
+        defUseChains.visit(self.AST, self.CFG)
         self.UDA = AssignsVisitor(defUseChains)
         self.UDA.visit(self.AST)
         self.UDA.combine()

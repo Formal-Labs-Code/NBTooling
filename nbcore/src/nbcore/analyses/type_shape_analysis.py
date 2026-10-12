@@ -6,12 +6,11 @@ on a name another cell defines, but nothing about whether a reassignment
 along the way actually changed what that name *means*. That's exactly the
 `cross_cell_semantic` bug shape (e.g. `data = [1,2,3]` then later
 `data = len(data)` - same name, list becomes int, a downstream
-`data.append(...)` crashes) - and it's also exactly the shape
-`def_use.py`'s `unbound_names` computation is structurally blind to
-(read-before-write in the same cell cancels out of a plain set
-difference), so fixing the edge-tracking wouldn't help here even if it
-were fixed. This sidesteps the problem instead: track a coarse type tag
-per name across cells, and flag it when a reassignment changes the tag.
+`data.append(...)` crashes). Dependency edges (now flow-sensitive, so
+`data = len(data)` does depend on the earlier `data`) still only say
+*that* a cell depends on a name, not that its meaning changed. This fills
+that gap: track a coarse type tag per name across cells, and flag it when
+a reassignment changes the tag.
 
 Not a real type inference engine - a small, closed set of tags inferred
 from purely local syntax (literals, and a knowledge-base of well-known
