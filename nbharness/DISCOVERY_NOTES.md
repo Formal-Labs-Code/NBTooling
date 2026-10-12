@@ -31,7 +31,9 @@ The raw result includes:
 - `path`: the propagation chain through the notebook
 - `label`: the contaminated variable at the sink
 - `line`: the sink's line within `cell_id`
-- `source` (preprocessing leaks only): the taint-introducing call - `cell`, `line`, `call` and the unsplit `variable` it ran on. The data-leak analysis records it when a taintKB call (`fit_transform`, `fit_resample`, ...) runs, or at the `fit()` behind a `transform()` on unsplit data, and carries it through assignments and joins.
+- `source`: `cell`, `line`, `call` and `variable` of what caused the leak, carried through assignments and joins by the data-leak analysis:
+  - preprocessing leaks: the taint-introducing call (`fit_transform`, `fit_resample`, ..., or the `fit()` behind a `transform()` on unsplit data) and the unsplit variable it ran on
+  - train/test overlap leaks: the other half of the train/test pair - the `fit()` call and its training variable when the error fires at `predict()`/`score()`, or the evaluation call when it fires at `fit()`
 
 What the wrapper populates:
 
@@ -40,8 +42,6 @@ What the wrapper populates:
 - `path`: the raw `path` list
 - `locations`: `{"role": "sink", "cell", "line"}`, plus `{"role": "source", ...}` when a source is known
 - `message`: the raw `message`
-
-`source` stays `null` for train/test overlap leaks (the same rows used for training and evaluation): there is no single originating call, and the analyzer does not yet record where each `fit()`/`predict()` usage happened.
 
 ## Feasibility check B: notebook execution / verify
 
@@ -53,6 +53,6 @@ For the NBHarness-first contract, the primary tool is still `analyze()`; `verify
 
 ## Relevance to later PoCs
 
-The key fact for the later verify/repair loop is that preprocessing leaks now come with a canonical `source` - the cell and line of the call to move after the split - so a repair loop can target it directly instead of reconstructing it from `path`. Overlap leaks still only give the sink and path.
+The key fact for the later verify/repair loop is that preprocessing leaks now come with a canonical `source` - the cell and line of the call to move after the split - so a repair loop can target it directly instead of reconstructing it from `path`. For overlap leaks the source is the training (or evaluation) call whose data has to be narrowed to its own split.
 
 This wrapper is intentionally thin: it translates the raw analyzer output without inventing new analysis semantics.

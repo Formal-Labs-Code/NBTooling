@@ -105,5 +105,28 @@ class TestNBHarnessCLI(unittest.TestCase):
             )
         self.assertEqual(results_false, '')
 
+    def test_dataleak_overlap_reports_training_site(self):
+        """
+        Training on the whole X and then evaluating on X_test is a
+        train/test overlap leak - no preprocessing involved - so the
+        finding's source is where the model was fit, not a taint origin.
+        """
+        results_true = nbharness(
+                filename=None,
+                notebook=read_json(TEST_RES_PATH + "dataleak_overlap_true.ipynb"),
+                analyses=[DATA_LEAK],
+                start=0,
+                level=10
+            )
+        self.assertEqual(results_true, '[{"cell_id":3,"errors":[{"line":1,"label":"X_test", "error_type":"ErrorType.TERMINAL", "message":"Train/test overlap: `X_test` passed to `lr.predict` shares rows with `X` used by `lr.fit` (cell 2, line 3), so evaluation scores are inflated.", "source":{"cell": 2, "line": 3, "call": "lr.fit", "variable": "X"}}],"path":[0, 1, 2, 3]}]')
+        results_false = nbharness(
+                filename=None,
+                notebook=read_json(TEST_RES_PATH + "dataleak_overlap_false.ipynb"),
+                analyses=[DATA_LEAK],
+                start=0,
+                level=10
+            )
+        self.assertEqual(results_false, '')
+
 if __name__ == "__main__":
     unittest.main()

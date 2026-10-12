@@ -14,7 +14,7 @@ class Usage(Enum):
     NONE = auto()
 
 class DataLeakAbstractDomain:
-    def __init__(self, dfs: DataFrameSet = DataFrameSet(), taint: bool = False, usages: set[Usage] = set[Usage](), dull=False, fitted_from: tuple = None, taint_origin: dict = None) -> None:
+    def __init__(self, dfs: DataFrameSet = DataFrameSet(), taint: bool = False, usages: set[Usage] = set[Usage](), dull=False, fitted_from: tuple = None, taint_origin: dict = None, usage_sites: dict = None) -> None:
         '''
         Abstract domain that keeps track of data frames, if those data frames are tainted,
         if any data frames have been used for testing or training
@@ -40,6 +40,10 @@ class DataLeakAbstractDomain:
         # leaky transform()). Provenance only - deliberately left out of
         # __eq__ so it never affects fixpoint convergence.
         self.taint_origin: dict = taint_origin
+        # Usage -> the same location shape, for the trainKB/testKB call that
+        # added that usage (e.g. TRAIN -> `lr.fit(X, y)`). Also provenance
+        # only, also outside __eq__.
+        self.usage_sites: dict = dict(usage_sites or {})
 
     def apply_taint(self, new_source: str, origin: dict = None) -> DataLeakAbstractDomain:
         self.taint = True
@@ -77,9 +81,15 @@ class DataLeakAbstractState(AbstractState):
             if test_dfs.dfs.cartesian_overlap(train_dfs.dfs):
                 label, call = self._sink_of(node)
                 if label is not None:
-                    message = (f"Train/test overlap: `{label}` passed to `{call}` shares rows with the "
-                               f"model's training data, so evaluation scores are inflated.")
-                    errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, label, ErrorType.TERMINAL, message))
+                    other = self._counterpart_site(cell_IR, node, train_dfs, test_dfs)
+                    if other:
+                        with_what = (f"`{other['variable']}` used by `{other['call']}` "
+                                     f"(cell {other['cell']}, line {other['line']})")
+                    else:
+                        with_what = "the model's training data"
+                    message = (f"Train/test overlap: `{label}` passed to `{call}` shares rows with "
+                               f"{with_what}, so evaluation scores are inflated.")
+                    errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, label, ErrorType.TERMINAL, message, source=other))
                 return errors
             
             if test_dfs.dfs.cartesian_overlap(train_dfs.dfs, weak=True) and test_dfs.taint and train_dfs.taint:
@@ -96,6 +106,20 @@ class DataLeakAbstractState(AbstractState):
                     errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, label, ErrorType.TERMINAL, message, source=origin))
                 return errors
         return errors
+
+    @staticmethod
+    def _counterpart_site(cell_IR, node: Node, train_dfs: DataLeakAbstractDomain, test_dfs: DataLeakAbstractDomain) -> dict:
+        '''
+        For an overlap leak, the location of the OTHER half of the train/test
+        pair - the fit() call when the error fires at predict(), and vice
+        versa. None if that site was never recorded.
+        '''
+        train_site = train_dfs.usage_sites.get(Usage.TRAIN)
+        test_site = test_dfs.usage_sites.get(Usage.TEST)
+        here = (cell_IR.cell_id, node.line_number)
+        if train_site and (train_site["cell"], train_site["line"]) == here:
+            return test_site
+        return train_site
 
     @staticmethod
     def _sink_of(node: Node) -> tuple:
@@ -131,7 +155,8 @@ class DataLeakAbstractState(AbstractState):
                 self.state[other_var].usages.union(other_domain.usages),
                 self.state[other_var].dull | other_domain.dull,
                 self.state[other_var].fitted_from or other_domain.fitted_from,
-                self.state[other_var].taint_origin or other_domain.taint_origin
+                self.state[other_var].taint_origin or other_domain.taint_origin,
+                {**other_domain.usage_sites, **self.state[other_var].usage_sites}
             )
 
         return self

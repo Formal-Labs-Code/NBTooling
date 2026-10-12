@@ -252,5 +252,25 @@ class TestDataFrames(unittest.TestCase):
         a_state.condition(IntermediateRepresentations("", 1), Node("", None, line_number=1, path=1), errors)
         self.assertEqual(errors, [])
 
+    def test_overlap_source_is_counterpart_usage_site(self):
+        dfs_train = DataFrameSet({'x': [DataFrame('x', Columns({'col1': True}), Rows(0, 4))]})
+        dfs_test = DataFrameSet({'x': [DataFrame('x', Columns({'col1': True}), Rows(2, 6))]})
+        fit_site = {"cell": 2, "line": 3, "call": "lr.fit", "variable": "X"}
+        predict_site = {"cell": 3, "line": 1, "call": "lr.predict", "variable": "X_test"}
+
+        a_state = DataLeakAbstractState()
+        a_state.state['fit'] = DataLeakAbstractDomain(dfs_train, False, {Usage.TRAIN}, usage_sites={Usage.TRAIN: fit_site})
+        a_state.state['pred'] = DataLeakAbstractDomain(dfs_test, False, {Usage.TEST}, usage_sites={Usage.TEST: predict_site})
+
+        # Firing at predict() points back at fit() ...
+        errors = []
+        a_state.condition(IntermediateRepresentations("", 3), Node("", None, line_number=1, path=1), errors)
+        self.assertEqual(errors[0].source, fit_site)
+
+        # ... and firing at fit() (predict ran first) points at predict().
+        errors = []
+        a_state.condition(IntermediateRepresentations("", 2), Node("", None, line_number=3, path=1), errors)
+        self.assertEqual(errors[0].source, predict_site)
+
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,7 @@ class DataLeakAnalysis(Analysis):
         '''
         if isinstance(cfg_node, RestoreNode):
             other: DataLeakAbstractDomain = a_state.state[cfg_node.right_hand_side[0]]
-            a_state.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin)
+            a_state.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin, usage_sites=other.usage_sites)
 
         if not cfg_node.ast_node:
             return a_state
@@ -89,11 +89,11 @@ class DataLeakAnalysis(Analysis):
                 # Should be visitor ideally.
                 x_kw = self._extract_kw(cfg_node, 'x')
                 x = x_kw[0].value.id if x_kw else None
-                self._clone_assign(as_transformed, cfg_node, override_source=x).usages.add(Usage.TRAIN)
+                self._tag_usage(self._clone_assign(as_transformed, cfg_node, override_source=x), Usage.TRAIN, cfg_node, cell_IR, x)
                 self._record_fit_on_receiver(cfg_node, as_transformed, cell_IR)
 
             elif func_name in self.testKB:
-                self._clone_assign(as_transformed, cfg_node).usages.add(Usage.TEST)
+                self._tag_usage(self._clone_assign(as_transformed, cfg_node), Usage.TEST, cfg_node, cell_IR)
 
             elif func_name in self.transformKB:
                 self.transform_transformer(cfg_node, as_transformed, cell_IR)
@@ -238,6 +238,17 @@ class DataLeakAnalysis(Analysis):
         Location of a taint-introducing call, reported as a finding's source.
         '''
         return {"cell": cell_IR.cell_id, "line": cfg_node.line_number, "call": cfg_node.func_name, "variable": variable}
+
+
+    def _tag_usage(self, domain: DataLeakAbstractDomain, usage: Usage, cfg_node, cell_IR, variable=None) -> None:
+        '''
+        Marks the call's result as used for training/testing and records
+        where, so overlap findings can point at the other half of the pair.
+        '''
+        domain.usages.add(usage)
+        if variable is None and cfg_node.ast_node.args and isinstance(cfg_node.ast_node.args[0], ast.Name):
+            variable = cfg_node.ast_node.args[0].id
+        domain.usage_sites[usage] = self._origin(cfg_node, cell_IR, variable)
 
 
     def _record_fit_on_receiver(self, cfg_node, as_transformed, cell_IR) -> None:
@@ -446,7 +457,7 @@ class DataLeakAnalysis(Analysis):
             source_arg = cfg_node.ast_node.args[arg_pos].id
 
         other: DataLeakAbstractDomain = as_transformed.state[source_arg]
-        as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin)
+        as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(copy.deepcopy(other.dfs), other.taint, other.usages.copy(), dull=other.dull, taint_origin=other.taint_origin, usage_sites=other.usage_sites)
 
         return as_transformed.state[cfg_node.left_hand_side]
 
