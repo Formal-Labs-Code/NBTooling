@@ -9,14 +9,16 @@ from itertools import product
 import re
 from enum import Enum, auto
 
-_MANGLED = re.compile(r"~inline_\d+_\w+")
+_SYNTHETIC = re.compile(r"~[A-Za-z_]\w*")
 
 
 def demangle(text, cell_IR) -> tuple:
     '''
-    (text with inlined-call names restored to their originals, name of the
-    inlined function they came from or None), e.g.
-    "~inline_0_test_model_model.predict" -> ("model.predict", "test_model").
+    (text with the CFG builder's synthetic names - inlined-call renames and
+    hoisted ~call_<n> temps - restored to their original text, the inlined
+    function they belong to or None), e.g.
+    "~inline_0_test_model_model.predict" -> ("model.predict", "test_model"),
+    "~call_0.fit_transform" -> ("MinMaxScaler().fit_transform", None).
     '''
     if text is None:
         return None, None
@@ -28,9 +30,11 @@ def demangle(text, cell_IR) -> tuple:
         if original is None:
             return match.group(0)
         found.append(original[1])
-        return original[0]
+        # a temp's text can itself contain temps / inlined names
+        return _SYNTHETIC.sub(restore, original[0])
 
-    return _MANGLED.sub(restore, text), (found[0] if found else None)
+    restored = _SYNTHETIC.sub(restore, text)
+    return restored, next((f for f in found if f), None)
 
 
 def _where(site: dict) -> str:

@@ -22,6 +22,14 @@ class TestReducedInlining(unittest.TestCase):
             "~inline_1_f___return__": ("f()", "f"),
         })
 
+    def test_nested_local_call_inlined_when_eligible_else_blackbox(self):
+        eligible = build_cfg("def f(a):\n    return a + 1\nprint(f(2))\n")
+        self.assertIn("~inline_0_f_a", eligible.inline_names)
+        # default argument: not inlinable yet, but nested -> black-box, not rejected
+        ineligible = build_cfg("def f(a, b=1):\n    return a + b\nprint(f(2))\n")
+        self.assertFalse(any(k.startswith("~inline_") for k in ineligible.inline_names))
+        self.assertIn("f(2)", [node.label for node in ineligible.nodes])
+
     def test_simple_call_is_inlined_not_blackbox(self):
         cfg = build_cfg("def f(x):\n    return x + 1\ny = f(5)\n")
         # def-node, param-bind, return-expr, restore-to-target

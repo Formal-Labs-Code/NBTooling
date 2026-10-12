@@ -145,6 +145,12 @@ data:
 
 ## Known simplifications (not gaps, but worth knowing about)
 
+- Nested calls are hoisted into `~call_<n>` temps (A-normal form) so each
+  call has its own CFG node: `print(lr.score(X, y))` is
+  `~call_0 = lr.score(X, y)` then `print(~call_0)`. Calls inside
+  comprehensions, `while` tests and def/class headers are not hoisted.
+  `CFG.inline_names` maps each temp back to its original text.
+
 - `def_use.py`'s `DefUseChains` computes a cell's inputs as the names
   live at the entry of its CFG (`liveness.py`), so they respect statement
   order, branches, loops and inlined calls: `x = f(x)` reads an earlier

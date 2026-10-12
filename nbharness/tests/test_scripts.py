@@ -47,6 +47,15 @@ class TestNBHarnessScripts(unittest.TestCase):
         self.assertEqual(s_err["source"]["call"], n_err["source"]["call"])
         self.assertEqual((s_err["file_line"], s_err["source"]["file_line"]), (33, 20))
 
+    def test_evaluation_call_nested_in_other_calls(self):
+        results = run("dataleak_script_nested_call_true.py")
+        self.assertEqual(len(results), 1)
+        err = results[0]["errors"][0]
+        self.assertEqual((err["label"], err["file_line"]), ("X_test", 15))
+        self.assertIn("passed to `lr.predict`", err["message"])
+        # the hoisted receiver temp is reported under its original text
+        self.assertEqual(err["source"]["call"], "MinMaxScaler().fit_transform")
+
     def test_notebook_only_analysis_rejected_without_markers(self):
         with self.assertRaises(ValueError):
             nbharness(filename=os.path.join(TEST_RES_PATH, "dataleak_script_flat_true.py"), notebook=None,

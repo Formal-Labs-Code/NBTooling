@@ -15,6 +15,11 @@ Phase-1 scope (see parser/README.md for the tracked backlog):
     kwargs, nested/recursive calls, multiple returns) is a tracked TODO,
     not an oversight -- see parser/README.md.
   * Every other call is treated as black-box (BBorBInode).
+  * Calls nested inside an expression are put in A-normal form: each is
+    hoisted, innermost first, into its own `~call_<n> = <call>` assignment
+    ahead of the statement (see _hoist_stmt), so it gets its own call node.
+    A nested call to a local function is inlined when eligible and stays
+    black-box otherwise (it is never rejected).
   * FunctionDef/ClassDef bodies are opaque at their *definition* site: a
     single node is emitted for the
     `def`/`class` statement itself, but its body is not spliced into the
@@ -52,8 +57,9 @@ class CFG:
         self.nodes = nodes
         self.blackbox_assignments = blackbox_assignments
         self.filename = filename
-        # mangled name -> (original name, inlined function's name), for every
-        # name _inline_call renamed; lets analyses report user-facing names.
+        # synthetic name -> (original text, function it belongs to or None):
+        # every name _inline_call renamed, and every ~call_<n> temp a nested
+        # call was hoisted into; lets analyses report user-facing names.
         self.inline_names = inline_names if inline_names is not None else {}
 
     def __repr__(self):
@@ -124,6 +130,9 @@ class CFGBuilder:
         self.local_functions = {}  # name -> FunctionDef, populated as defs are visited (source order)
         self._inline_counter = 0
         self.inline_names = {}
+        self._call_counter = 0
+        self._pending = []        # temp-assignment blocks hoisted out of the statement being visited
+        self._inline_stack = []   # names of the functions currently being inlined
 
     def build(self, module):
         entry = self._append(EntryOrExitNode("Entry module"))
@@ -188,7 +197,91 @@ class CFGBuilder:
                 f"CFG builder has no handler for statement type '{type(stmt).__name__}' "
                 "(tracked backlog item, see cfg_builder.py docstring)"
             )
-        return method(stmt)
+        outer, self._pending = self._pending, []
+        try:
+            stmt = self._hoist_stmt(stmt)
+            hoisted = self._pending
+        finally:
+            self._pending = outer
+        result = method(stmt)
+        if not hoisted:
+            return result
+        first, lasts, breaks, continues = self._chain(hoisted + [result])
+        return BlockResult(first, lasts, breaks, continues)
+
+    # -- nested calls: A-normal form ----------------------------------------
+    #
+    # A call nested inside another expression (`print(lr.score(X, y))`,
+    # `f(g(x))`, `MinMaxScaler().fit_transform(X)`, `acc = lr.score(X, y) * 100`)
+    # is hoisted into its own `~call_<n> = <call>` assignment, evaluated
+    # before the statement, which then reads the temp. Each call thus gets
+    # its own call node, so analyses see it like any top-level call. The top-
+    # level call of an Assign/Expr statement stays in place (visit_Assign /
+    # visit_Expr handle it). Not hoisted: calls inside comprehensions (they
+    # may read the comprehension's own variables), `while` tests (re-evaluated
+    # every iteration), and def/class headers. Temps are recorded in
+    # inline_names with their original text, for user-facing output.
+
+    def _hoist_stmt(self, stmt):
+        if isinstance(stmt, n.Assign):
+            return self._with(stmt, value=self._hoist(stmt.value, top=isinstance(stmt.value, n.Call)))
+        if isinstance(stmt, n.Expr):
+            return self._with(stmt, value=self._hoist(stmt.value, top=isinstance(stmt.value, n.Call)))
+        if isinstance(stmt, (n.AugAssign, n.AnnAssign, n.Return)):
+            return self._with(stmt, value=self._hoist(stmt.value))
+        if isinstance(stmt, n.Raise):
+            return self._with(stmt, exc=self._hoist(stmt.exc), cause=self._hoist(stmt.cause))
+        if isinstance(stmt, n.If):
+            return self._with(stmt, test=self._hoist(stmt.test))
+        if isinstance(stmt, n.For):
+            return self._with(stmt, iter=self._hoist(stmt.iter))
+        if isinstance(stmt, n.With):
+            items = [self._with(item, context_expr=self._hoist(item.context_expr)) for item in stmt.items]
+            return self._with(stmt, items=items) if any(a is not b for a, b in zip(items, stmt.items)) else stmt
+        return stmt
+
+    @staticmethod
+    def _with(node, **fields):
+        """`node`, or a shallow copy with `fields` replaced if any changed."""
+        if all(getattr(node, k) is v for k, v in fields.items()):
+            return node
+        new = copy.copy(node)
+        for k, v in fields.items():
+            setattr(new, k, v)
+        return new
+
+    def _hoist(self, expr, top=False):
+        """`expr` with every nested call replaced by a hoisted temp; `top`
+        keeps `expr` itself in place if it is a call."""
+        if not isinstance(expr, n.AST) or isinstance(expr, _COMPREHENSION_TYPES):
+            return expr
+        if not any(isinstance(x, n.Call) for x in n.walk(expr)):
+            return expr
+        new = copy.copy(expr)
+        for field, value in n.iter_fields(expr):
+            if isinstance(value, list):
+                setattr(new, field, [self._hoist(v) for v in value])
+            elif isinstance(value, n.AST):
+                setattr(new, field, self._hoist(value))
+        if isinstance(new, n.Call) and not top:
+            return self._emit_temp(new)
+        return new
+
+    def _emit_temp(self, call):
+        temp = f"~call_{self._call_counter}"
+        self._call_counter += 1
+        self.inline_names[temp] = (unparse(call), self._inline_stack[-1] if self._inline_stack else None)
+        assign = n.Assign(targets=[n.Name(id=temp, ctx=n.Store())], value=call, lineno=call.lineno)
+        inline = False
+        if self._is_local_call(call):
+            try:
+                self._check_inline_eligible(self.local_functions[call.func.id], call, needs_return=True)
+                inline = True
+            except NotImplementedError:
+                pass  # as before hoisting: a nested local call that can't be inlined stays black-box
+        block = self._inline_call(temp, assign, call) if inline else self._make_assignment_call(temp, assign, call)
+        self._pending.append(block)
+        return n.Name(id=temp, ctx=n.Load(), lineno=call.lineno)
 
     def visit_stmts(self, stmts):
         # A statement visitor may return None for statements that
@@ -597,29 +690,29 @@ class CFGBuilder:
             self._append(node)
             items.append(node)
 
-        items.append(self.visit_stmts(body))
+        self._inline_stack.append(definition.name)
+        try:
+            items.append(self.visit_stmts(body))
 
-        if return_stmt is not None:
-            return_temp = f"{prefix}__return__"
-            self.inline_names[return_temp] = (f"{definition.name}()", definition.name)
-            synthetic = n.Assign(
-                targets=[n.Name(id=return_temp, ctx=n.Store())],
-                value=return_stmt.value, lineno=return_stmt.lineno,
-            )
-            ret_node = AssignmentNode(
-                f"{return_temp} = {unparse(return_stmt.value)}", return_temp, synthetic,
-                _collect_names(return_stmt.value), path=self.filename,
-            )
-            self._append(ret_node)
-            items.append(ret_node)
+            if return_stmt is not None:
+                return_temp = f"{prefix}__return__"
+                self.inline_names[return_temp] = (f"{definition.name}()", definition.name)
+                # Through visit(), like any assignment: a returned call gets
+                # its own call node, and calls nested in it are hoisted.
+                items.append(self.visit(n.Assign(
+                    targets=[n.Name(id=return_temp, ctx=n.Store())],
+                    value=return_stmt.value, lineno=return_stmt.lineno,
+                )))
+        finally:
+            self._inline_stack.pop()
 
-            if lhs is not None:
-                restore_node = RestoreNode(
-                    f"{lhs} = {return_temp}", lhs, [return_temp],
-                    line_number=containing_stmt.lineno, path=self.filename,
-                )
-                self._append(restore_node)
-                items.append(restore_node)
+        if return_stmt is not None and lhs is not None:
+            restore_node = RestoreNode(
+                f"{lhs} = {return_temp}", lhs, [return_temp],
+                line_number=containing_stmt.lineno, path=self.filename,
+            )
+            self._append(restore_node)
+            items.append(restore_node)
 
         first, lasts, breaks, continues = self._chain(items)
         if first is None:

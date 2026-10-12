@@ -69,12 +69,42 @@ class TestCFGBuilder(unittest.TestCase):
         merge = cfg.nodes[3]
         self.assertIn(merge, cond.outgoing)  # no-branch-taken path
 
+    def test_nested_calls_are_hoisted_innermost_first(self):
+        cfg = build_cfg("print(f(g(x)), key=h(y))\n")
+        labels = [node.label for node in cfg.nodes[1:-1]]
+        self.assertEqual(labels, [
+            "g(x)", "~call_0 = g(x)",
+            "f(~call_0)", "~call_1 = f(~call_0)",
+            "h(y)", "~call_2 = h(y)",
+            "print(~call_1, key=~call_2)",
+        ])
+        self.assertEqual(cfg.inline_names["~call_1"], ("f(~call_0)", None))
+
+    def test_call_receiver_and_operator_operands_are_hoisted(self):
+        cfg = build_cfg("acc = lr.score(X, y) * 100\nZ = MinMaxScaler().fit_transform(X)\n")
+        labels = [node.label for node in cfg.nodes[1:-1]]
+        self.assertEqual(labels, [
+            "lr.score(X, y)", "~call_0 = lr.score(X, y)", "acc = ~call_0 * 100",
+            "MinMaxScaler()", "~call_1 = MinMaxScaler()",
+            "~call_1.fit_transform(X)", "Z = ~call_1.fit_transform(X)",
+        ])
+
+    def test_top_level_call_and_comprehension_calls_stay_in_place(self):
+        cfg = build_cfg("a = f(x)\nb = [g(v) for v in a]\n")
+        self.assertEqual([node.label for node in cfg.nodes[1:-1]],
+                         ["f(x)", "a = f(x)", "b = [g(v) for v in a]"])
+
     def test_for_loop_has_back_edge(self):
         cfg = build_cfg("for i in range(10):\n    total += i\nprint(total)\n")
-        header = cfg.nodes[1]
-        self.assertIsInstance(header, CondNode)
-        body = cfg.nodes[2]
-        self.assertIn(header, body.outgoing)  # back-edge to loop header
+        # range(10) is a call nested in the loop statement: hoisted into a
+        # temp evaluated once, before the header (see cfg_builder's ANF).
+        header = next(node for node in cfg.nodes if isinstance(node, CondNode))
+        iterable = [node for node in cfg.nodes[:cfg.nodes.index(header)] if node.label.endswith("range(10)")]
+        self.assertEqual(len(iterable), 2)  # the call node and its ~call_0 assignment
+        self.assertEqual(header.label, "for i in ~call_0:")
+        body = header.positive_nodes[0]
+        self.assertIn(header, body.outgoing)  # back-edge to loop header ...
+        self.assertFalse(set(iterable) & set(body.outgoing))  # ... not to the iterable
 
     def test_break_skips_loop_continue_returns_to_header(self):
         cfg = build_cfg(
