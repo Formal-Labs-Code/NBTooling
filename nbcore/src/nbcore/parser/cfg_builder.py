@@ -3,16 +3,16 @@ Builds a CFG (see cfg_nodes.py) directly from our own AST (ast_nodes.py),
 replacing simple_cfg's ast-module-based StmtVisitor/ExprVisitor.
 
 Phase-1 scope (see parser/README.md for the tracked backlog):
-  * Same-cell function-call inlining is implemented for a *reduced* case
-    only: a call to a locally-defined function, with plain positional
-    parameters/arguments only (no defaults/*args/**kwargs/keywords), whose
-    body contains no calls to other locally-defined functions (which rules
-    out recursion and nested inlining), and whose result -- if used --
-    comes from a single trailing `return <expr>`. A local call outside
-    that (see _check_inline_eligible) is treated as a black-box call, with
-    a CFG.warnings entry naming the condition that failed. Broadening this
-    (defaults, kwargs, nested/recursive calls, multiple returns) is a
-    tracked TODO, see parser/README.md.
+  * Same-cell function-call inlining: a call to a locally-defined function
+    is spliced in with its parameters bound like Python binds a call
+    (positional, keyword, defaults, keyword-only), any number of `return`s
+    (each jumps to the end of the call), and nested calls to other local
+    functions inlined in turn (recursion and more than _MAX_INLINE_DEPTH
+    levels are not). *args/**kwargs parameters, */** unpacking at the call
+    site, signature mismatches, a tuple-unpacked result, and using the
+    result of a function that never returns a value are outside that (see
+    _check_inline_eligible): such a call is treated as a black-box call,
+    with a CFG.warnings entry naming the condition that failed.
   * A statement with no CFG handler, or one the AST transformer replaced
     with n.Unsupported, becomes a no-op node plus a CFG.warnings entry,
     rather than rejecting the whole cell.
@@ -138,7 +138,7 @@ class CFGBuilder:
         self.inline_names = {}
         self._call_counter = 0
         self._pending = []        # temp-assignment blocks hoisted out of the statement being visited
-        self._inline_stack = []   # names of the functions currently being inlined
+        self._inline_frames = []  # _InlineFrame per call currently being inlined (innermost last)
         self.warnings = []
 
     def build(self, module):
@@ -233,7 +233,9 @@ class CFGBuilder:
             return self._with(stmt, value=self._hoist(stmt.value, top=isinstance(stmt.value, n.Call)))
         if isinstance(stmt, n.Expr):
             return self._with(stmt, value=self._hoist(stmt.value, top=isinstance(stmt.value, n.Call)))
-        if isinstance(stmt, (n.AugAssign, n.AnnAssign, n.Return)):
+        if isinstance(stmt, n.Return):
+            return self._with(stmt, value=self._hoist(stmt.value, top=isinstance(stmt.value, n.Call)))
+        if isinstance(stmt, (n.AugAssign, n.AnnAssign)):
             return self._with(stmt, value=self._hoist(stmt.value))
         if isinstance(stmt, n.Raise):
             return self._with(stmt, exc=self._hoist(stmt.exc), cause=self._hoist(stmt.cause))
@@ -272,6 +274,10 @@ class CFGBuilder:
         if isinstance(new, n.Call) and not top:
             return self._emit_temp(new)
         return new
+
+    @property
+    def _inline_stack(self):
+        return [frame.name for frame in self._inline_frames]
 
     def _warn(self, node, message):
         self.warnings.append({"line": getattr(node, "lineno", None), "message": message})
@@ -353,6 +359,10 @@ class CFGBuilder:
             # individually visible as "assigned from a call" to analyses
             # like find_necessary_cells that scan for BBorBInode.
             results = [self._make_assignment_call(_extract_lhs(t), stmt, stmt.value) for t in flat_targets]
+            for index, result in enumerate(results):
+                # which unpacked value this call node produces, e.g. X_test is
+                # target 1 of 4 in `X_train, X_test, y_train, y_test = split(...)`
+                result.first.target_index, result.first.target_count = index, len(results)
             for a, b in zip(results, results[1:]):
                 for last in a.lasts:
                     last.connect(b.first)
@@ -471,13 +481,6 @@ class CFGBuilder:
     def visit_ClassDef(self, stmt):
         bases = ", ".join(unparse(b) for b in stmt.bases)
         return self._leaf(f"class {stmt.name}({bases}):" if bases else f"class {stmt.name}:", stmt)
-
-    def visit_Return(self, stmt):
-        rhs = _collect_names(stmt.value)
-        label = "return " + unparse(stmt.value) if stmt.value is not None else "return"
-        node = ReturnNode(label, None, stmt, rhs, path=self.filename)
-        self._append(node)
-        return BlockResult(node, [node], [], [])
 
     def visit_Raise(self, stmt):
         label = "raise"
@@ -640,109 +643,154 @@ class CFGBuilder:
 
     def _check_inline_eligible(self, definition, call_node, *, needs_return):
         name = definition.name
-        args = definition.args
-        if args.vararg or args.kwarg or args.kwonlyargs or args.defaults:
+        if definition.args.vararg or definition.args.kwarg:
             raise NotImplementedError(
-                f"inlining '{name}': only plain positional parameters are supported "
-                "(no *args/**kwargs/defaults/keyword-only params yet) -- TODO, "
-                "see parser/README.md"
+                f"inlining '{name}': *args/**kwargs parameters are not supported yet -- TODO"
             )
-        if call_node.keywords or any(isinstance(a, n.Starred) for a in call_node.args):
+        if any(isinstance(a, n.Starred) for a in call_node.args) or any(k.arg is None for k in call_node.keywords):
             raise NotImplementedError(
-                f"inlining '{name}': only plain positional call arguments are supported "
-                "(no keyword args or */** unpacking at the call site yet) -- TODO"
+                f"inlining '{name}': */** unpacking at the call site is not supported yet -- TODO"
             )
-        if len(call_node.args) != len(args.args):
+        self._bind_arguments(definition, call_node)  # raises on a signature mismatch
+        if name in self._inline_stack:
+            raise NotImplementedError(f"inlining '{name}': recursive call -- not inlined")
+        if len(self._inline_stack) >= _MAX_INLINE_DEPTH:
             raise NotImplementedError(
-                f"inlining '{name}': call passes {len(call_node.args)} argument(s) but "
-                f"the function takes {len(args.args)} -- TODO (no defaults support yet)"
+                f"inlining '{name}': nested more than {_MAX_INLINE_DEPTH} inlined calls deep"
             )
-        for stmt in definition.body:
-            for node in n.walk(stmt):
-                if node is not call_node and isinstance(node, n.Call) \
-                        and isinstance(node.func, n.Name) and node.func.id in self.local_functions:
-                    raise NotImplementedError(
-                        f"inlining '{name}': its body calls another locally-defined "
-                        f"function ('{node.func.id}') -- nested inlining and recursion "
-                        "are not supported yet -- TODO"
-                    )
-        body = definition.body
-        trailing_is_return = isinstance(body[-1], n.Return)
-        trailing_return_ok = trailing_is_return and body[-1].value is not None
-        other_returns = any(
-            isinstance(node, n.Return) and node is not body[-1]
-            for stmt in body for node in n.walk(stmt)
-        )
-        if other_returns or (needs_return and not trailing_return_ok):
+        if needs_return and not any(r.value is not None for r in _own_returns(definition.body)):
             raise NotImplementedError(
-                f"inlining '{name}': only a single 'return <expr>' as the function's "
-                "very last statement is supported yet -- TODO"
+                f"inlining '{name}': its result is used but it never returns a value"
             )
+
+    @staticmethod
+    def _bind_arguments(definition, call_node):
+        """[(parameter, expression)] in parameter order, like Python binds a
+        call: positional arguments, then keywords, then defaults. Raises
+        NotImplementedError when the call doesn't fit the signature."""
+        name, args = definition.name, definition.args
+        params = [a.arg for a in args.args]
+        kwonly = [a.arg for a in args.kwonlyargs]
+        if len(call_node.args) > len(params):
+            raise NotImplementedError(
+                f"inlining '{name}': call passes {len(call_node.args)} positional argument(s) but "
+                f"the function takes {len(params)}"
+            )
+        bound = dict(zip(params, call_node.args))
+        for kw in call_node.keywords:
+            if kw.arg in bound or kw.arg not in params + kwonly:
+                raise NotImplementedError(f"inlining '{name}': unexpected or repeated keyword argument '{kw.arg}'")
+            bound[kw.arg] = kw.value
+        first_default = len(params) - len(args.defaults)
+        for i, param in enumerate(params):
+            if param not in bound:
+                if i < first_default:
+                    raise NotImplementedError(f"inlining '{name}': missing argument '{param}'")
+                bound[param] = args.defaults[i - first_default]
+        for param, default in zip(kwonly, args.kw_defaults):
+            if param not in bound:
+                if default is None:
+                    raise NotImplementedError(f"inlining '{name}': missing keyword-only argument '{param}'")
+                bound[param] = default
+        return [(param, bound[param]) for param in params + kwonly]
+
+    def visit_Return(self, stmt):
+        if not self._inline_frames:
+            rhs = _collect_names(stmt.value)
+            label = "return " + unparse(stmt.value) if stmt.value is not None else "return"
+            node = ReturnNode(label, None, stmt, rhs, path=self.filename)
+            self._append(node)
+            return BlockResult(node, [node], [], [])
+        # Inside an inlined body: assign the call's return temp and jump to
+        # the end of the inlined call - no fall-through, like `break`.
+        frame = self._inline_frames[-1]
+        block = None
+        if stmt.value is not None:
+            block = self.visit_Assign(n.Assign(
+                targets=[n.Name(id=frame.return_temp, ctx=n.Store())], value=stmt.value, lineno=stmt.lineno,
+            ))
+        if block is None:
+            block = self._leaf("return", stmt)
+        frame.exits.extend(block.lasts)
+        return BlockResult(block.first, [], block.breaks, block.continues)
 
     def _inline_call(self, lhs, containing_stmt, call_node):
         definition = self.local_functions[call_node.func.id]
         self._check_inline_eligible(definition, call_node, needs_return=lhs is not None)
+        bindings = self._bind_arguments(definition, call_node)
 
         call_index = self._inline_counter
         self._inline_counter += 1
         prefix = f"~inline_{call_index}_{definition.name}_"
 
-        params = [a.arg for a in definition.args.args]
+        params = [param for param, _ in bindings]
         body = copy.deepcopy(definition.body)
-        return_stmt = body.pop() if body and isinstance(body[-1], n.Return) else None
-
-        rename_scope = body + ([return_stmt] if return_stmt else [])
-        bound = self._collect_locally_bound(rename_scope, params)
+        bound = self._collect_locally_bound(body, params)
         rename_map = {name: f"{prefix}{name}" for name in bound}
         for name, mangled in rename_map.items():
             self.inline_names[mangled] = (name, definition.name)
-        for stmt in rename_scope:
+        for stmt in body:
             for node in n.walk(stmt):
                 if isinstance(node, n.Name) and node.id in rename_map:
                     node.id = rename_map[node.id]
+        return_temp = f"{prefix}__return__"
+        self.inline_names[return_temp] = (f"{definition.name}()", definition.name)
 
-        items = []
-        for param, arg_expr in zip(params, call_node.args):
-            renamed_param = rename_map[param]
-            synthetic = n.Assign(
-                targets=[n.Name(id=renamed_param, ctx=n.Store())],
-                value=arg_expr, lineno=call_node.lineno,
-            )
-            node = AssignmentNode(
-                f"{renamed_param} = {unparse(arg_expr)}", renamed_param, synthetic,
-                _collect_names(arg_expr), path=self.filename,
-            )
-            self._append(node)
-            items.append(node)
+        # Parameters bound through visit(), in the caller's scope: a call in
+        # an argument or default expression gets its own node too.
+        items = [
+            self.visit(n.Assign(targets=[n.Name(id=rename_map[param], ctx=n.Store())],
+                                value=expr, lineno=call_node.lineno))
+            for param, expr in bindings
+        ]
 
-        self._inline_stack.append(definition.name)
+        frame = _InlineFrame(definition.name, return_temp)
+        self._inline_frames.append(frame)
         try:
             items.append(self.visit_stmts(body))
-
-            if return_stmt is not None:
-                return_temp = f"{prefix}__return__"
-                self.inline_names[return_temp] = (f"{definition.name}()", definition.name)
-                # Through visit(), like any assignment: a returned call gets
-                # its own call node, and calls nested in it are hoisted.
-                items.append(self.visit(n.Assign(
-                    targets=[n.Name(id=return_temp, ctx=n.Store())],
-                    value=return_stmt.value, lineno=return_stmt.lineno,
-                )))
         finally:
-            self._inline_stack.pop()
+            self._inline_frames.pop()
 
-        if return_stmt is not None and lhs is not None:
+        first, lasts, breaks, continues = self._chain(items)
+        exits = list(lasts) + frame.exits  # falling off the end, or any return
+        if first is None:
+            return None  # nothing to model (e.g. a body of only imports): transparent, like an import
+
+        if lhs is not None:
             restore_node = RestoreNode(
                 f"{lhs} = {return_temp}", lhs, [return_temp],
                 line_number=containing_stmt.lineno, path=self.filename,
             )
             self._append(restore_node)
-            items.append(restore_node)
+            for node in exits:
+                node.connect(restore_node)
+            exits = [restore_node]
+        return BlockResult(first, exits, breaks, continues)
 
-        first, lasts, breaks, continues = self._chain(items)
-        if first is None:
-            return None  # nothing to model (e.g. a body of only imports): transparent, like an import
-        return BlockResult(first, lasts, breaks, continues)
+
+class _InlineFrame:
+    """One call being inlined: its function, return temp, and the nodes its
+    `return` statements leave from (joined at the end of the call)."""
+    __slots__ = ("name", "return_temp", "exits")
+
+    def __init__(self, name, return_temp):
+        self.name = name
+        self.return_temp = return_temp
+        self.exits = []
+
+
+_MAX_INLINE_DEPTH = 8
+
+
+def _own_returns(stmts):
+    """Return statements of a function body, not of functions nested in it."""
+    todo = list(stmts)
+    while todo:
+        node = todo.pop()
+        if isinstance(node, n.Return):
+            yield node
+        if not isinstance(node, (n.FunctionDef, n.ClassDef)):
+            todo.extend(n.iter_child_nodes(node))
 
 
 def get_cfg(module, filename):

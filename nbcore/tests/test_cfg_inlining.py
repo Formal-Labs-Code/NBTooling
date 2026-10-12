@@ -25,8 +25,8 @@ class TestReducedInlining(unittest.TestCase):
     def test_nested_local_call_inlined_when_eligible_else_blackbox(self):
         eligible = build_cfg("def f(a):\n    return a + 1\nprint(f(2))\n")
         self.assertIn("~inline_0_f_a", eligible.inline_names)
-        # default argument: not inlinable yet, but nested -> black-box, not rejected
-        ineligible = build_cfg("def f(a, b=1):\n    return a + b\nprint(f(2))\n")
+        # *args: not inlinable yet, but nested -> black-box, not rejected
+        ineligible = build_cfg("def f(*a):\n    return a\nprint(f(2))\n")
         self.assertFalse(any(k.startswith("~inline_") for k in ineligible.inline_names))
         self.assertIn("f(2)", [node.label for node in ineligible.nodes])
 
@@ -82,10 +82,62 @@ class TestReducedInlining(unittest.TestCase):
         self.assertEqual(restore.left_hand_side, "z")
 
 
+class TestBroadenedInlining(unittest.TestCase):
+    def labels(self, cfg):
+        return [node.label for node in cfg.nodes[1:-1]]
+
+    def test_keyword_arguments_and_defaults_bind_parameters(self):
+        cfg = build_cfg("def f(x, y=2, *, z=3):\n    return x + y + z\nr = f(1, z=w)\n")
+        self.assertEqual(self.labels(cfg)[1:4], [  # [0] is the def node
+            "~inline_0_f_x = 1", "~inline_0_f_y = 2", "~inline_0_f_z = w",
+        ])
+        self.assertEqual(cfg.warnings, [])
+
+    def test_nested_local_calls_are_inlined(self):
+        cfg = build_cfg(
+            "def load(p):\n    return read(p)\n"
+            "def main():\n    X = load('a.csv')\n    return X\n"
+            "main()\n"
+        )
+        self.assertIn("~inline_0_main_X", cfg.inline_names)
+        self.assertIn("~inline_1_load_p", cfg.inline_names)
+        self.assertEqual(cfg.inline_names["~inline_1_load_p"], ("p", "load"))
+        self.assertIn("read(~inline_1_load_p)", self.labels(cfg))
+        self.assertEqual(cfg.warnings, [])
+
+    def test_every_return_joins_at_the_restore_node(self):
+        cfg = build_cfg(
+            "def f(x):\n"
+            "    if x:\n"
+            "        return 1\n"
+            "    return 2\n"
+            "y = f(c)\n"
+            "print(y)\n"
+        )
+        restore = next(node for node in cfg.nodes if isinstance(node, RestoreNode))
+        self.assertEqual(sorted(p.label for p in restore.ingoing),
+                         ["~inline_0_f___return__ = 1", "~inline_0_f___return__ = 2"])
+        # `return 1` doesn't fall through into `return 2`
+        early = next(node for node in cfg.nodes if node.label == "~inline_0_f___return__ = 1")
+        self.assertEqual(early.outgoing, [restore])
+
+    def test_recursive_call_is_inlined_once_then_black_box(self):
+        cfg = build_cfg("def f(x):\n    return f(x)\ny = f(1)\n")
+        self.assertIn("~inline_0_f_x", cfg.inline_names)
+        self.assertFalse(any(k.startswith("~inline_1") for k in cfg.inline_names))
+        self.assertTrue(any("recursive call" in w["message"] for w in cfg.warnings))
+
+    def test_inlining_depth_is_limited(self):
+        chain = "".join(f"def f{i}(x):\n    return f{i + 1}(x)\n" for i in range(12))
+        cfg = build_cfg(chain + "def f12(x):\n    return x\ny = f0(1)\n")
+        depths = {k.split("_")[2] for k in cfg.inline_names if k.startswith("~inline_")}
+        self.assertEqual(len(depths), 8)
+        self.assertTrue(any("more than 8" in w["message"] for w in cfg.warnings))
+
+
 class TestUninlinableCallsDegrade(unittest.TestCase):
-    """A local call outside the reduced inlining scope is treated as a
-    black-box call plus a CFG warning naming why, instead of rejecting the
-    whole cell."""
+    """A local call outside the inlining scope is treated as a black-box
+    call plus a CFG warning naming why, instead of rejecting the cell."""
 
     def assert_degraded(self, src, reason):
         cfg = build_cfg(src)
@@ -95,40 +147,29 @@ class TestUninlinableCallsDegrade(unittest.TestCase):
         messages = [w["message"] for w in cfg.warnings]
         self.assertTrue(any(reason in m and "opaque call" in m for m in messages), messages)
 
-    def test_keyword_argument(self):
-        self.assert_degraded("def f(x):\n    return x\ny = f(x=1)\n", "keyword args")
-
-    def test_default_parameter(self):
-        self.assert_degraded("def f(x, y=2):\n    return x\ny = f(1)\n", "only plain positional parameters")
-
     def test_star_args_parameter(self):
-        self.assert_degraded("def f(*args):\n    return args\ny = f(1, 2)\n", "only plain positional parameters")
+        self.assert_degraded("def f(*args):\n    return args\ny = f(1, 2)\n", "*args/**kwargs")
 
-    def test_wrong_arg_count(self):
-        self.assert_degraded("def f(x, y):\n    return x\nz = f(1)\n", "argument(s) but")
+    def test_star_unpacking_at_call_site(self):
+        self.assert_degraded("def f(x):\n    return x\ny = f(*a)\n", "unpacking at the call site")
 
-    def test_recursion(self):
-        self.assert_degraded("def f(x):\n    return f(x)\ny = f(1)\n", "calls another locally-defined function")
+    def test_missing_argument(self):
+        self.assert_degraded("def f(x, y):\n    return x\nz = f(1)\n", "missing argument 'y'")
+
+    def test_too_many_arguments(self):
+        self.assert_degraded("def f(x):\n    return x\nz = f(1, 2)\n", "positional argument(s) but")
+
+    def test_unknown_keyword(self):
+        self.assert_degraded("def f(x):\n    return x\nz = f(q=1)\n", "keyword argument 'q'")
 
     def test_tuple_unpack_of_result(self):
         self.assert_degraded("def f(x):\n    return x\na, b = f(1)\n", "tuple/multi-target unpacking")
 
-    def test_non_trailing_or_multiple_return(self):
-        self.assert_degraded(
-            "def f(x):\n"
-            "    if x > 0:\n"
-            "        return x\n"
-            "    y = 2\n"
-            "    return y\n"
-            "z = f(1)\n",
-            "single 'return <expr>'",
-        )
-
     def test_void_function_result_assigned(self):
-        self.assert_degraded("def f(x):\n    print(x)\ny = f(5)\n", "single 'return <expr>'")
+        self.assert_degraded("def f(x):\n    print(x)\ny = f(5)\n", "never returns a value")
 
     def test_warning_carries_line(self):
-        cfg = build_cfg("a = 1\ndef f(x, y=2):\n    return x\nb = f(a)\n")
+        cfg = build_cfg("a = 1\ndef f(*xs):\n    return xs\nb = f(a)\n")
         self.assertEqual([w["line"] for w in cfg.warnings], [4])
 
 
