@@ -16,6 +16,10 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-jupyter[server]>=0.9",
+    "mcp<2",
+]
+mcp = [
+    "mcp<2",
 ]
 # Registers the nbharness REST API inside a running Jupyter server. This is
 # deliberately just jupyter_server, not jupyterlab - the labextension that

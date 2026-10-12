@@ -63,6 +63,12 @@ class TestBuildFixpointDependencyEdges(unittest.TestCase):
         edges = build_fixpoint_dependency_edges(notebook_IR)
         self.assertEqual(edges, {0: set()})
 
+    def test_definer_provenance_affects_state_equality_and_contains(self):
+        left = dependency_analysis.DependencyAS({"x": 0})
+        right = dependency_analysis.DependencyAS({"x": 1})
+        self.assertNotEqual(left, right)
+        self.assertFalse(left.contains(right))
+
     def test_deeper_k_does_not_misattribute_a_transitive_chain(self):
         """
         Regression guard for a real bug found while investigating whether

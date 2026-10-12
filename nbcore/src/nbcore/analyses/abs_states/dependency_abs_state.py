@@ -29,7 +29,7 @@ class DependencyAS(AbstractState):
         self.defined_vars: dict[str, int] = deepcopy(defined_vars) if defined_vars else {}
 
     def __eq__(self, other: DependencyAS) -> bool:
-        return self.defined_vars.keys() == other.defined_vars.keys()
+        return self.defined_vars == other.defined_vars
 
     def projection(self) -> set[str]:
         return set(self.defined_vars.keys())
@@ -39,7 +39,7 @@ class DependencyAS(AbstractState):
             self.defined_vars.setdefault(var, definer)
 
     def contains(self, other: DependencyAS) -> bool:
-        return other.defined_vars.keys() <= self.defined_vars.keys()
+        return other.defined_vars.items() <= self.defined_vars.items()
 
     def condition(self, cell_IR, node, errors) -> list:
         """
