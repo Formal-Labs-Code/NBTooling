@@ -63,6 +63,13 @@ def add_file_lines(raw_results: str, notebook: dict) -> str:
 
 
 def nbharness(filename, notebook, analyses, start, level=5):
+    results, _ = run_batch(filename, notebook, analyses, start, level)
+    return results
+
+
+def run_batch(filename, notebook, analyses, start, level=5):
+    """nbharness(), also returning the loaded session (its cells carry
+    per-cell CFG warnings - see analysis_warnings)."""
     notebook = read_input(filename, notebook)
     script = is_script(notebook)
     if script and not has_cell_markers(notebook):
@@ -81,7 +88,28 @@ def nbharness(filename, notebook, analyses, start, level=5):
     event = RunBatchEvent(start)
     results = session.execute_event(event).dumps(True)
 
-    return add_file_lines(results, notebook) if script else results
+    return (add_file_lines(results, notebook) if script else results), session
+
+
+def analysis_warnings(session, notebook) -> list[dict]:
+    """What the parser degraded instead of rejecting - unsupported
+    statements analyzed as no-ops, local calls it couldn't inline analyzed
+    as opaque calls - as [{"cell", "line", "message"}] (+ "file_line" for
+    scripts), deduplicated (a function inlined twice warns once)."""
+    starts = cell_start_lines(notebook)
+    out, seen = [], set()
+    for cell_id, cell_IR in sorted(session.cells.items()):
+        for warning in getattr(cell_IR.CFG, "warnings", []):
+            key = (cell_id, warning.get("line"), warning.get("message"))
+            if key in seen:
+                continue
+            seen.add(key)
+            entry = {"cell": cell_id, "line": warning.get("line"), "message": warning.get("message")}
+            mapped = file_line(starts, cell_id, warning.get("line"))
+            if mapped is not None:
+                entry["file_line"] = mapped
+            out.append(entry)
+    return out
 
 
 def detect_bugs(filename, notebook, scope, cell_index, context_mode="deps", finding_types=None):

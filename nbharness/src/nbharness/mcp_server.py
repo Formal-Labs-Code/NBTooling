@@ -9,7 +9,7 @@ from nbcore.resource_utils.utils import read_json
 
 from nbcore.resource_utils.script_loading import first_code_cell, has_cell_markers, is_script, script_to_notebook
 
-from .cli import nbharness
+from .cli import analysis_warnings, run_batch
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -127,23 +127,29 @@ def _execute_notebook_for_verification(notebook: Any) -> bool:
     return True
 
 
-def _analyze_impl(notebook: Any) -> list[dict[str, Any]]:
-    """Run the existing NBHarness data-leak analysis and normalize it to the PoC schema."""
+def _analyze_impl(notebook: Any) -> dict[str, list[dict[str, Any]]]:
+    """Run the existing NBHarness data-leak analysis and normalize it to the PoC schema:
+    {"findings": [...], "warnings": [...]}."""
     payload = _coerce_notebook(notebook)
-    raw_result = nbharness(
+    raw_result, session = run_batch(
         filename=None,
         notebook=payload,
         analyses=[DATA_LEAK],
         start=first_code_cell(payload),
         level=10,
     )
-    return _normalize_findings(raw_result, single_cell_script=is_script(payload) and not has_cell_markers(payload))
+    return {
+        "findings": _normalize_findings(
+            raw_result, single_cell_script=is_script(payload) and not has_cell_markers(payload)),
+        "warnings": analysis_warnings(session, payload),
+    }
 
 
 def _verify_impl(notebook: Any) -> dict[str, Any]:
     """Run the analysis again and optionally execute the notebook end-to-end."""
     payload = _coerce_notebook(notebook)
-    findings = _analyze_impl(payload)
+    result = _analyze_impl(payload)
+    findings = result["findings"]
     notes: list[str] = []
     runs: bool | None = None
 
@@ -166,18 +172,24 @@ def _verify_impl(notebook: Any) -> dict[str, Any]:
         "leakage_clean": not findings,
         "runs": runs,
         "findings": findings,
+        "warnings": result["warnings"],
         "notes": " ".join(notes),
     }
 
 
 @mcp.tool()
-def analyze(notebook: str | dict[str, Any]) -> list[dict[str, Any]]:
+def analyze(notebook: str | dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Analyze a notebook or Python script and return leakage findings in the static-analysis schema.
 
     `notebook` is a .ipynb or .py path, notebook JSON (string or object),
     Python script source, or {"script": "<source>"}. A script is split into
     cells at `# %%` / `# In[ ]:` markers, or is a single cell without them;
-    script locations also carry `file_line`, the line in the script."""
+    script locations also carry `file_line`, the line in the script.
+
+    Returns {"findings": [...], "warnings": [...]}. Warnings list code the
+    analysis could only partly model - an unsupported statement analyzed as
+    a no-op, or a local call it couldn't inline analyzed as an opaque call
+    - so "no findings" for that code is not a guarantee of no leak."""
     return _analyze_impl(notebook)
 
 

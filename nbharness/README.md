@@ -37,7 +37,13 @@ contract.
 
 The `analyze` tool accepts a notebook (`.ipynb` path, or a notebook
 dict/JSON payload) or a Python script (`.py` path, raw source, or
-`{"script": "<source>"}`), and returns one finding per raw analyzer error.
+`{"script": "<source>"}`), and returns `{"findings": [...], "warnings": [...]}`:
+one finding per raw analyzer error, and one warning per piece of code the
+analysis could only partly model - a statement using an unsupported construct
+(analyzed as a no-op) or a local call it couldn't inline (analyzed as an
+opaque call). Each warning has `cell`, `line`, `message` and, for scripts,
+`file_line`. No findings for code with warnings is not a guarantee it has no
+leak.
 
 ## Python scripts
 

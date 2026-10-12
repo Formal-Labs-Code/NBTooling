@@ -36,7 +36,9 @@ The raw result includes:
   - train/test overlap leaks: the other half of the train/test pair - the `fit()` call and its training variable when the error fires at `predict()`/`score()`, or the evaluation call when it fires at `fit()`
   - when the call is inside a notebook-defined function that NBHarness inlined, names are the user's own (not the parser's internal `~inline_...` renames) and `source` also carries `function`, the function's name; the message says e.g. "`model.fit` (in `train_model`, cell 2, line 5)"
 
-What the wrapper populates:
+`analyze` returns `{"findings": [...], "warnings": [...]}`; `warnings` comes from each cell's CFG (`cfg.warnings`), recording code the parser degraded instead of rejecting.
+
+What the wrapper populates per finding:
 
 - `sink`: the raw `label` value
 - `source`: the raw `source` object, or `null` when absent
