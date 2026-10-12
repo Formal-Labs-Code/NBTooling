@@ -524,6 +524,18 @@ class Pass(stmt):
     _fields = ()
 
 
+class Unsupported(stmt):
+    """Placeholder for a statement using a construct the IR doesn't support
+    yet (see ast_transformer's __default__). Reads and binds nothing; the CFG
+    builder turns it into a no-op node plus a warning, so one unsupported
+    statement doesn't reject the whole cell."""
+    _fields = ()
+
+    def __init__(self, construct, **kw):
+        super().__init__(**kw)
+        self.construct = construct
+
+
 class arg(AST):
     _fields = ("arg", "annotation")
 

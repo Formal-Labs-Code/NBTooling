@@ -5,10 +5,12 @@ Only the grammar rules needed for the P0 (and a few easy P1) constructs have
 an explicit method here -- see notebook_python.lark's priority tags. Anything
 else (lambda, ternary `if/else`, walrus, decorated call args, async,
 del/assert/nonlocal, f-string interpolation, dict/set unpacking, bare set
-literals, same-cell function-call inlining) hits `__default__` below and
-raises `NotImplementedError` naming the construct, rather than silently
-producing a wrong tree. That list is the tracked backlog for the next
-increment -- see parser/README.md.
+literals) hits `__default__` below and raises `NotImplementedError` naming
+the construct, rather than silently producing a wrong tree. The innermost
+statement containing it then becomes an `n.Unsupported` placeholder (see
+ASTTransformer._transform_tree), so the rest of the cell is still analyzed.
+That list is the tracked backlog for the next increment -- see
+parser/README.md.
 
 Comprehensions (list/set/dict, generator expressions) *are* implemented,
 via `comp_for`/`comp_if`/`set_comp`/`dict_comp`/`genexpr_arg` below, but
@@ -19,6 +21,7 @@ import codecs
 import re
 
 from lark import Transformer, v_args
+from lark.exceptions import VisitError
 
 from . import ast_nodes as n
 
@@ -102,8 +105,29 @@ _ARITH_OPS = {
 _UNARY_OPS = {"+": n.UAdd, "-": n.USub, "~": n.Invert}
 
 
+def _is_statement_rule(rule: str) -> bool:
+    return (rule.endswith("_stmt") and rule != "simple_stmt") or rule in ("funcdef", "classdef")
+
+
 @v_args(meta=True)
 class ASTTransformer(Transformer):
+    def _transform_tree(self, tree):
+        """A statement whose subtree hits an unsupported construct becomes an
+        n.Unsupported placeholder instead of failing the whole cell. Lark
+        transforms bottom-up, so this catches at the innermost statement: an
+        unsupported expression inside a def body only replaces that one body
+        statement, not the def."""
+        if not _is_statement_rule(str(tree.data)):
+            return super()._transform_tree(tree)
+        try:
+            return super()._transform_tree(tree)
+        except NotImplementedError as exc:  # raised by __default__, which lark calls unwrapped
+            return n.Unsupported(construct=str(exc), lineno=tree.meta.line)
+        except VisitError as exc:  # raised inside a rule method
+            if not isinstance(exc.orig_exc, NotImplementedError):
+                raise
+            return n.Unsupported(construct=str(exc.orig_exc), lineno=tree.meta.line)
+
     # -- module / top level -------------------------------------------
 
     def start(self, meta, children):

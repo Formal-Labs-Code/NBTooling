@@ -8,12 +8,14 @@ Phase-1 scope (see parser/README.md for the tracked backlog):
     parameters/arguments only (no defaults/*args/**kwargs/keywords), whose
     body contains no calls to other locally-defined functions (which rules
     out recursion and nested inlining), and whose result -- if used --
-    comes from a single trailing `return <expr>`. Anything outside that
-    (see _check_inline_eligible) raises NotImplementedError naming exactly
-    which condition failed, rejecting the whole cell rather than silently
-    falling back to black-box or mis-inlining. Broadening this (defaults,
-    kwargs, nested/recursive calls, multiple returns) is a tracked TODO,
-    not an oversight -- see parser/README.md.
+    comes from a single trailing `return <expr>`. A local call outside
+    that (see _check_inline_eligible) is treated as a black-box call, with
+    a CFG.warnings entry naming the condition that failed. Broadening this
+    (defaults, kwargs, nested/recursive calls, multiple returns) is a
+    tracked TODO, see parser/README.md.
+  * A statement with no CFG handler, or one the AST transformer replaced
+    with n.Unsupported, becomes a no-op node plus a CFG.warnings entry,
+    rather than rejecting the whole cell.
   * Every other call is treated as black-box (BBorBInode).
   * Calls nested inside an expression are put in A-normal form: each is
     hoisted, innermost first, into its own `~call_<n> = <call>` assignment
@@ -53,7 +55,7 @@ from .unparse import unparse
 
 
 class CFG:
-    def __init__(self, nodes, blackbox_assignments, filename, inline_names=None):
+    def __init__(self, nodes, blackbox_assignments, filename, inline_names=None, warnings=None):
         self.nodes = nodes
         self.blackbox_assignments = blackbox_assignments
         self.filename = filename
@@ -61,6 +63,10 @@ class CFG:
         # every name _inline_call renamed, and every ~call_<n> temp a nested
         # call was hoisted into; lets analyses report user-facing names.
         self.inline_names = inline_names if inline_names is not None else {}
+        # [{"line", "message"}] for code the builder degraded instead of
+        # rejecting the cell: unsupported statements (no-op nodes) and local
+        # calls it couldn't inline (opaque calls).
+        self.warnings = warnings if warnings is not None else []
 
     def __repr__(self):
         return "".join(f"Node: {i} {n!r}\n\n" for i, n in enumerate(self.nodes))
@@ -133,6 +139,7 @@ class CFGBuilder:
         self._call_counter = 0
         self._pending = []        # temp-assignment blocks hoisted out of the statement being visited
         self._inline_stack = []   # names of the functions currently being inlined
+        self.warnings = []
 
     def build(self, module):
         entry = self._append(EntryOrExitNode("Entry module"))
@@ -143,7 +150,7 @@ class CFGBuilder:
             exit_node.connect_predecessors(result.lasts)
         else:
             entry.connect(exit_node)
-        return CFG(self.nodes, self.blackbox_assignments, self.filename, self.inline_names)
+        return CFG(self.nodes, self.blackbox_assignments, self.filename, self.inline_names, self.warnings)
 
     def _append(self, node):
         self.nodes.append(node)
@@ -193,10 +200,9 @@ class CFGBuilder:
     def visit(self, stmt):
         method = getattr(self, "visit_" + type(stmt).__name__, None)
         if method is None:
-            raise NotImplementedError(
-                f"CFG builder has no handler for statement type '{type(stmt).__name__}' "
-                "(tracked backlog item, see cfg_builder.py docstring)"
-            )
+            self._warn(stmt, f"statement type '{type(stmt).__name__}' is not supported by the CFG "
+                             "builder yet -- treated as a no-op")
+            return self._leaf(f"<unsupported {type(stmt).__name__}>", stmt)
         outer, self._pending = self._pending, []
         try:
             stmt = self._hoist_stmt(stmt)
@@ -267,6 +273,17 @@ class CFGBuilder:
             return self._emit_temp(new)
         return new
 
+    def _warn(self, node, message):
+        self.warnings.append({"line": getattr(node, "lineno", None), "message": message})
+
+    def _inline_blocker(self, call, needs_return):
+        """Why this local call can't be inlined (None if it can)."""
+        try:
+            self._check_inline_eligible(self.local_functions[call.func.id], call, needs_return=needs_return)
+        except NotImplementedError as exc:
+            return str(exc)
+        return None
+
     def _emit_temp(self, call):
         temp = f"~call_{self._call_counter}"
         self._call_counter += 1
@@ -274,11 +291,10 @@ class CFGBuilder:
         assign = n.Assign(targets=[n.Name(id=temp, ctx=n.Store())], value=call, lineno=call.lineno)
         inline = False
         if self._is_local_call(call):
-            try:
-                self._check_inline_eligible(self.local_functions[call.func.id], call, needs_return=True)
-                inline = True
-            except NotImplementedError:
-                pass  # as before hoisting: a nested local call that can't be inlined stays black-box
+            blocker = self._inline_blocker(call, needs_return=True)
+            inline = blocker is None
+            if blocker:
+                self._warn(call, f"{blocker} -- treated as an opaque call")
         block = self._inline_call(temp, assign, call) if inline else self._make_assignment_call(temp, assign, call)
         self._pending.append(block)
         return n.Name(id=temp, ctx=n.Load(), lineno=call.lineno)
@@ -321,11 +337,13 @@ class CFGBuilder:
 
         if isinstance(stmt.value, n.Call) and self._is_local_call(stmt.value):
             if len(flat_targets) != 1:
-                raise NotImplementedError(
-                    f"inlining '{stmt.value.func.id}': tuple/multi-target unpacking of an "
-                    "inlined call's result is not supported yet -- TODO, see parser/README.md"
-                )
-            return self._inline_call(_extract_lhs(flat_targets[0]), stmt, stmt.value)
+                blocker = (f"inlining '{stmt.value.func.id}': tuple/multi-target unpacking of an "
+                           "inlined call's result is not supported yet")
+            else:
+                blocker = self._inline_blocker(stmt.value, needs_return=True)
+            if blocker is None:
+                return self._inline_call(_extract_lhs(flat_targets[0]), stmt, stmt.value)
+            self._warn(stmt, f"{blocker} -- treated as an opaque call")
 
         if isinstance(stmt.value, n.Call):
             # Every target gets its own black-box-call + assignment pair
@@ -396,7 +414,10 @@ class CFGBuilder:
 
     def visit_Expr(self, stmt):
         if isinstance(stmt.value, n.Call) and self._is_local_call(stmt.value):
-            return self._inline_call(None, stmt, stmt.value)
+            blocker = self._inline_blocker(stmt.value, needs_return=False)
+            if blocker is None:
+                return self._inline_call(None, stmt, stmt.value)
+            self._warn(stmt, f"{blocker} -- treated as an opaque call")
         if isinstance(stmt.value, n.Call):
             node = self._make_call_node(stmt.value)
         else:
@@ -433,6 +454,10 @@ class CFGBuilder:
 
     def visit_Pass(self, stmt):
         return self._leaf("pass", stmt)
+
+    def visit_Unsupported(self, stmt):
+        self._warn(stmt, f"{stmt.construct} -- statement skipped (treated as a no-op)")
+        return self._leaf("<unsupported>", stmt)
 
     def visit_FunctionDef(self, stmt):
         params = ", ".join(a.arg for a in stmt.args.args)
@@ -716,7 +741,7 @@ class CFGBuilder:
 
         first, lasts, breaks, continues = self._chain(items)
         if first is None:
-            raise NotImplementedError(f"inlining '{definition.name}': empty function body not supported")
+            return None  # nothing to model (e.g. a body of only imports): transparent, like an import
         return BlockResult(first, lasts, breaks, continues)
 
 

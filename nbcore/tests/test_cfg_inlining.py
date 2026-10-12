@@ -2,7 +2,7 @@ import unittest
 
 from nbcore.parser.ast_transformer import build_ast
 from nbcore.parser.cfg_builder import get_cfg
-from nbcore.parser.cfg_nodes import AssignmentNode, RestoreNode
+from nbcore.parser.cfg_nodes import AssignmentNode, BBorBInode, RestoreNode
 from nbcore.parser.lark_parser import parse_to_tree
 
 
@@ -82,41 +82,68 @@ class TestReducedInlining(unittest.TestCase):
         self.assertEqual(restore.left_hand_side, "z")
 
 
-class TestReducedInliningRejections(unittest.TestCase):
-    def assert_rejected(self, src):
-        with self.assertRaises(NotImplementedError):
-            build_cfg(src)
+class TestUninlinableCallsDegrade(unittest.TestCase):
+    """A local call outside the reduced inlining scope is treated as a
+    black-box call plus a CFG warning naming why, instead of rejecting the
+    whole cell."""
 
-    def test_rejects_keyword_argument(self):
-        self.assert_rejected("def f(x):\n    return x\ny = f(x=1)\n")
+    def assert_degraded(self, src, reason):
+        cfg = build_cfg(src)
+        self.assertFalse([k for k in cfg.inline_names if k.startswith("~inline_")], "should not be inlined")
+        self.assertTrue(any(isinstance(node, BBorBInode) and node.func_name == "f" for node in cfg.nodes),
+                        "the call should be a black-box call node")
+        messages = [w["message"] for w in cfg.warnings]
+        self.assertTrue(any(reason in m and "opaque call" in m for m in messages), messages)
 
-    def test_rejects_default_parameter(self):
-        self.assert_rejected("def f(x, y=2):\n    return x\ny = f(1)\n")
+    def test_keyword_argument(self):
+        self.assert_degraded("def f(x):\n    return x\ny = f(x=1)\n", "keyword args")
 
-    def test_rejects_star_args_parameter(self):
-        self.assert_rejected("def f(*args):\n    return args\ny = f(1, 2)\n")
+    def test_default_parameter(self):
+        self.assert_degraded("def f(x, y=2):\n    return x\ny = f(1)\n", "only plain positional parameters")
 
-    def test_rejects_wrong_arg_count(self):
-        self.assert_rejected("def f(x, y):\n    return x\nz = f(1)\n")
+    def test_star_args_parameter(self):
+        self.assert_degraded("def f(*args):\n    return args\ny = f(1, 2)\n", "only plain positional parameters")
 
-    def test_rejects_recursion(self):
-        self.assert_rejected("def f(x):\n    return f(x)\ny = f(1)\n")
+    def test_wrong_arg_count(self):
+        self.assert_degraded("def f(x, y):\n    return x\nz = f(1)\n", "argument(s) but")
 
-    def test_rejects_tuple_unpack_of_result(self):
-        self.assert_rejected("def f(x):\n    return x\na, b = f(1)\n")
+    def test_recursion(self):
+        self.assert_degraded("def f(x):\n    return f(x)\ny = f(1)\n", "calls another locally-defined function")
 
-    def test_rejects_non_trailing_or_multiple_return(self):
-        self.assert_rejected(
+    def test_tuple_unpack_of_result(self):
+        self.assert_degraded("def f(x):\n    return x\na, b = f(1)\n", "tuple/multi-target unpacking")
+
+    def test_non_trailing_or_multiple_return(self):
+        self.assert_degraded(
             "def f(x):\n"
             "    if x > 0:\n"
             "        return x\n"
             "    y = 2\n"
             "    return y\n"
-            "z = f(1)\n"
+            "z = f(1)\n",
+            "single 'return <expr>'",
         )
 
-    def test_rejects_void_function_result_assigned(self):
-        self.assert_rejected("def f(x):\n    print(x)\ny = f(5)\n")
+    def test_void_function_result_assigned(self):
+        self.assert_degraded("def f(x):\n    print(x)\ny = f(5)\n", "single 'return <expr>'")
+
+    def test_warning_carries_line(self):
+        cfg = build_cfg("a = 1\ndef f(x, y=2):\n    return x\nb = f(a)\n")
+        self.assertEqual([w["line"] for w in cfg.warnings], [4])
+
+
+class TestUnsupportedStatementsDegrade(unittest.TestCase):
+    def test_unsupported_statement_is_a_noop_with_warning(self):
+        cfg = build_cfg("x = 1\ndel x\ny = 2\n")
+        labels = [node.label for node in cfg.nodes[1:-1]]
+        self.assertEqual(labels, ["x = 1", "<unsupported>", "y = 2"])
+        self.assertEqual([w["line"] for w in cfg.warnings], [2])
+        self.assertIn("del_stmt", cfg.warnings[0]["message"])
+
+    def test_unsupported_statement_in_function_body_only_skips_that_statement(self):
+        cfg = build_cfg("def f(a):\n    del a\n    b = a\n    return b\nz = f(1)\n")
+        self.assertIn("~inline_0_f_a", cfg.inline_names)  # f is still inlined
+        self.assertIn("~inline_0_f_b = ~inline_0_f_a", [node.label for node in cfg.nodes])
 
 
 if __name__ == "__main__":

@@ -268,11 +268,14 @@ class TestParserAST(unittest.TestCase):
         self.assertIsInstance(mod.body[1].value, n.Tuple)
         self.assertEqual(len(mod.body[1].value.elts), 2)
 
-    def test_unsupported_construct_raises_clearly(self):
-        # Comprehensions are implemented (see the comprehension tests
-        # below) - lambda remains a genuinely unsupported construct.
-        with self.assertRaises(NotImplementedError):
-            parse("f = lambda x: x + 1")
+    def test_unsupported_construct_becomes_placeholder_statement(self):
+        # lambda remains a genuinely unsupported construct: the statement
+        # containing it is replaced by n.Unsupported naming the construct,
+        # and the rest of the cell still parses.
+        mod = parse("a = 1\nf = lambda x: x + 1\nb = 2")
+        self.assertEqual([type(s).__name__ for s in mod.body], ["Assign", "Unsupported", "Assign"])
+        self.assertEqual(mod.body[1].lineno, 2)
+        self.assertIn("lambda", mod.body[1].construct)
 
     def test_victim_notebook_loads_without_raising(self):
         # Regression test for the original bug report: this real-world
