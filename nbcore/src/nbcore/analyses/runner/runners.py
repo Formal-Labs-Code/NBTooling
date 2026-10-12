@@ -37,9 +37,13 @@ class Runner:
             as_transformed: AbstractState = analysis.F_transformer(next_node, as_entry, cell_IR)
             as_transformed.condition(cell_IR, next_node, errors)
 
+            # A node's first visit always propagates: otherwise a no-op node
+            # (def, if/for header) reached with an empty state compares equal
+            # to the empty default and strands everything after it.
+            first_visit = next_node not in node_state_map
             as_prev = node_state_map[next_node]
-        
-            if as_prev != as_transformed:
+
+            if first_visit or as_prev != as_transformed:
                 for node in next_node.outgoing:
                     transform_order.push(node)
                 node_state_map[next_node] = as_transformed

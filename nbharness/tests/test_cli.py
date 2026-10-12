@@ -174,6 +174,33 @@ class TestNBHarnessCLI(unittest.TestCase):
         self.assertEqual((results[0]["cell_id"], err["line"], err["label"]), (4, 3, "X_test"))
         self.assertTrue(err["message"].startswith("Preprocessing leak:"))
         self.assertEqual(err["source"], {"cell": 2, "line": 2, "call": "scaler.fit_transform", "variable": "X"})
+    def test_dataleak_found_when_cell_starts_with_noop_node(self):
+        """
+        A cell whose first node is a no-op (if/def header) after imports
+        used to strand the rest of the cell: the node's output equalled the
+        runner's empty default state, so its successors were never queued.
+        """
+        imports = ("import numpy as np\n"
+                   "from sklearn.preprocessing import MinMaxScaler\n"
+                   "from sklearn.model_selection import train_test_split\n"
+                   "from sklearn.linear_model import LogisticRegression\n")
+        body = ("X = np.genfromtxt('data.csv', delimiter=',', dtype=None)\n"
+                "y = np.random.choice(3, size=4)\n"
+                "X_selected = MinMaxScaler().fit_transform(X)\n"
+                "X_train, X_test, y_train, y_test = train_test_split(X_selected, y, test_size=0.25)\n"
+                "lr = LogisticRegression()\n"
+                "a = lr.fit(X_train, y_train)\n"
+                "y_pred = lr.predict(X_test)\n")
+        indented = "".join("    " + line + "\n" for line in body.splitlines())
+        shapes = {
+            "if-guard": imports + "if __name__ == '__main__':\n" + indented,
+            "def-main": imports + "def main():\n" + indented + "main()\n",
+        }
+        for name, src in shapes.items():
+            with self.subTest(shape=name):
+                result = nbharness(filename=None, notebook={"cells": [{"cell_type": "code", "source": src}]},
+                                   analyses=[DATA_LEAK], start=0, level=10)
+                self.assertIn("Preprocessing leak", result)
 
 if __name__ == "__main__":
     unittest.main()
