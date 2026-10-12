@@ -6,7 +6,38 @@ from .abs_state import AbstractState
 from ..abs_domains.dataleak_lattice.data_frame_sets import DataFrameSet
 from ..runner.analysis_results import ErrorInfo, ErrorType
 from itertools import product
+import re
 from enum import Enum, auto
+
+_MANGLED = re.compile(r"~inline_\d+_\w+")
+
+
+def demangle(text, cell_IR) -> tuple:
+    '''
+    (text with inlined-call names restored to their originals, name of the
+    inlined function they came from or None), e.g.
+    "~inline_0_test_model_model.predict" -> ("model.predict", "test_model").
+    '''
+    if text is None:
+        return None, None
+    names = getattr(getattr(cell_IR, "CFG", None), "inline_names", None) or {}
+    found = []
+
+    def restore(match):
+        original = names.get(match.group(0))
+        if original is None:
+            return match.group(0)
+        found.append(original[1])
+        return original[0]
+
+    return _MANGLED.sub(restore, text), (found[0] if found else None)
+
+
+def _where(site: dict) -> str:
+    '''"(in `f`, cell 2, line 5)" / "(cell 2, line 5)" for a recorded site.'''
+    scope = f"in `{site['function']}`, " if site.get("function") else ""
+    return f"({scope}cell {site['cell']}, line {site['line']})"
+
 
 class Usage(Enum):
     TRAIN = auto()
@@ -79,29 +110,28 @@ class DataLeakAbstractState(AbstractState):
 
         for test_dfs, train_dfs in product(test_domain, train_domain):
             if test_dfs.dfs.cartesian_overlap(train_dfs.dfs):
-                label, call = self._sink_of(node)
+                label, call, func = self._sink_of(node, cell_IR)
                 if label is not None:
                     other = self._counterpart_site(cell_IR, node, train_dfs, test_dfs)
                     if other:
-                        with_what = (f"`{other['variable']}` used by `{other['call']}` "
-                                     f"(cell {other['cell']}, line {other['line']})")
+                        with_what = f"`{other['variable']}` used by `{other['call']}` {_where(other)}"
                     else:
                         with_what = "the model's training data"
-                    message = (f"Train/test overlap: `{label}` passed to `{call}` shares rows with "
+                    message = (f"Train/test overlap: `{label}` passed to `{call}`{self._in(func)} shares rows with "
                                f"{with_what}, so evaluation scores are inflated.")
                     errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, label, ErrorType.TERMINAL, message, source=other))
                 return errors
             
             if test_dfs.dfs.cartesian_overlap(train_dfs.dfs, weak=True) and test_dfs.taint and train_dfs.taint:
-                label, call = self._sink_of(node)
+                label, call, func = self._sink_of(node, cell_IR)
                 if label is not None:
                     origin = test_dfs.taint_origin or train_dfs.taint_origin
                     if origin:
-                        cause = (f"`{origin['call']}` (cell {origin['cell']}, line {origin['line']}) ran on "
+                        cause = (f"`{origin['call']}` {_where(origin)} ran on "
                                  f"unsplit `{origin['variable']}` before the train/test split")
                     else:
                         cause = "a preprocessing step ran on the data before the train/test split"
-                    message = (f"Preprocessing leak: `{label}` passed to `{call}` is contaminated because "
+                    message = (f"Preprocessing leak: `{label}` passed to `{call}`{self._in(func)} is contaminated because "
                                f"{cause}, so test-set statistics leak into the model.")
                     errors.append(ErrorInfo(cell_IR.cell_id, node.line_number, label, ErrorType.TERMINAL, message, source=origin))
                 return errors
@@ -122,22 +152,31 @@ class DataLeakAbstractState(AbstractState):
         return train_site
 
     @staticmethod
-    def _sink_of(node: Node) -> tuple:
-        '''
-        (variable, call name) at the node completing the train/test pair, e.g.
-        ("X_test", "predict"). Variable is None when the call's first argument
-        isn't a plain name - no error is reported for that shape.
-        '''
-        if not isinstance(node, AssignmentNode):
-            return node.label, node.label
+    def _in(func) -> str:
+        return f" (in `{func}`)" if func else ""
 
-        call = getattr(node, "func_name", None)
-        if isinstance(node.ast_node, ast.Call):
-            func = node.ast_node.func
-            call = call or (func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None))
-            if node.ast_node.args and isinstance(node.ast_node.args[0], ast.Name):
-                return node.ast_node.args[0].id, call
-        return None, call
+    @staticmethod
+    def _sink_of(node: Node, cell_IR=None) -> tuple:
+        '''
+        (variable, call name, inlined function or None) at the node completing
+        the train/test pair, e.g. ("X_test", "lr.predict", None), with
+        inlined-call names restored. Variable is None when the call's first
+        argument isn't a plain name - no error is reported for that shape.
+        '''
+        label, call = None, None
+        if not isinstance(node, AssignmentNode):
+            label = call = node.label
+        else:
+            call = getattr(node, "func_name", None)
+            if isinstance(node.ast_node, ast.Call):
+                f = node.ast_node.func
+                call = call or (f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None))
+                if node.ast_node.args and isinstance(node.ast_node.args[0], ast.Name):
+                    label = node.ast_node.args[0].id
+
+        label, label_func = demangle(label, cell_IR)
+        call, call_func = demangle(call, cell_IR)
+        return label, call, label_func or call_func
 
     def aug_join(self, other: DataLeakAbstractState) -> DataLeakAbstractState:
         '''

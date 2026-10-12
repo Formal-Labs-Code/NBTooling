@@ -48,10 +48,13 @@ from .unparse import unparse
 
 
 class CFG:
-    def __init__(self, nodes, blackbox_assignments, filename):
+    def __init__(self, nodes, blackbox_assignments, filename, inline_names=None):
         self.nodes = nodes
         self.blackbox_assignments = blackbox_assignments
         self.filename = filename
+        # mangled name -> (original name, inlined function's name), for every
+        # name _inline_call renamed; lets analyses report user-facing names.
+        self.inline_names = inline_names if inline_names is not None else {}
 
     def __repr__(self):
         return "".join(f"Node: {i} {n!r}\n\n" for i, n in enumerate(self.nodes))
@@ -120,6 +123,7 @@ class CFGBuilder:
         self.blackbox_assignments = set()
         self.local_functions = {}  # name -> FunctionDef, populated as defs are visited (source order)
         self._inline_counter = 0
+        self.inline_names = {}
 
     def build(self, module):
         entry = self._append(EntryOrExitNode("Entry module"))
@@ -130,7 +134,7 @@ class CFGBuilder:
             exit_node.connect_predecessors(result.lasts)
         else:
             entry.connect(exit_node)
-        return CFG(self.nodes, self.blackbox_assignments, self.filename)
+        return CFG(self.nodes, self.blackbox_assignments, self.filename, self.inline_names)
 
     def _append(self, node):
         self.nodes.append(node)
@@ -572,6 +576,8 @@ class CFGBuilder:
         rename_scope = body + ([return_stmt] if return_stmt else [])
         bound = self._collect_locally_bound(rename_scope, params)
         rename_map = {name: f"{prefix}{name}" for name in bound}
+        for name, mangled in rename_map.items():
+            self.inline_names[mangled] = (name, definition.name)
         for stmt in rename_scope:
             for node in n.walk(stmt):
                 if isinstance(node, n.Name) and node.id in rename_map:
@@ -595,6 +601,7 @@ class CFGBuilder:
 
         if return_stmt is not None:
             return_temp = f"{prefix}__return__"
+            self.inline_names[return_temp] = (f"{definition.name}()", definition.name)
             synthetic = n.Assign(
                 targets=[n.Name(id=return_temp, ctx=n.Store())],
                 value=return_stmt.value, lineno=return_stmt.lineno,

@@ -34,6 +34,7 @@ The raw result includes:
 - `source`: `cell`, `line`, `call` and `variable` of what caused the leak, carried through assignments and joins by the data-leak analysis:
   - preprocessing leaks: the taint-introducing call (`fit_transform`, `fit_resample`, ..., or the `fit()` behind a `transform()` on unsplit data) and the unsplit variable it ran on
   - train/test overlap leaks: the other half of the train/test pair - the `fit()` call and its training variable when the error fires at `predict()`/`score()`, or the evaluation call when it fires at `fit()`
+  - when the call is inside a notebook-defined function that NBHarness inlined, names are the user's own (not the parser's internal `~inline_...` renames) and `source` also carries `function`, the function's name; the message says e.g. "`model.fit` (in `train_model`, cell 2, line 5)"
 
 What the wrapper populates:
 

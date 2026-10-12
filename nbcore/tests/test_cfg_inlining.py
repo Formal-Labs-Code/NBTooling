@@ -11,6 +11,17 @@ def build_cfg(src):
 
 
 class TestReducedInlining(unittest.TestCase):
+    def test_inline_names_map_back_to_originals(self):
+        cfg = build_cfg("def f(a):\n    b = a + 1\n    return b\nx = f(1)\nf(2)\n")
+        self.assertEqual(cfg.inline_names, {
+            "~inline_0_f_a": ("a", "f"),
+            "~inline_0_f_b": ("b", "f"),
+            "~inline_0_f___return__": ("f()", "f"),
+            "~inline_1_f_a": ("a", "f"),
+            "~inline_1_f_b": ("b", "f"),
+            "~inline_1_f___return__": ("f()", "f"),
+        })
+
     def test_simple_call_is_inlined_not_blackbox(self):
         cfg = build_cfg("def f(x):\n    return x + 1\ny = f(5)\n")
         # def-node, param-bind, return-expr, restore-to-target

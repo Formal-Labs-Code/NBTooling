@@ -1,6 +1,7 @@
 from collections import defaultdict
 from ..parser.cfg_nodes import AssignmentCallNode, AssignmentNode, BBorBInode, RestoreNode
 from .abs_states.dataleak_abs_state import (
+    demangle,
     DataLeakAbstractDomain,
     DataLeakAbstractState,
     DataFrameSet,
@@ -240,7 +241,12 @@ class DataLeakAnalysis(Analysis):
         '''
         Location of a taint-introducing call, reported as a finding's source.
         '''
-        return {"cell": cell_IR.cell_id, "line": cfg_node.line_number, "call": cfg_node.func_name, "variable": variable}
+        call, call_func = demangle(cfg_node.func_name, cell_IR)
+        variable, var_func = demangle(variable, cell_IR)
+        origin = {"cell": cell_IR.cell_id, "line": cfg_node.line_number, "call": call, "variable": variable}
+        if call_func or var_func:
+            origin["function"] = call_func or var_func
+        return origin
 
 
     def _tag_usage(self, domain: DataLeakAbstractDomain, usage: Usage, cfg_node, cell_IR, variable=None) -> None:

@@ -135,7 +135,8 @@ class TestNBHarnessCLI(unittest.TestCase):
         parameter as binding `model` for the whole cell, so the runner
         explored cell 3 straight after cell 1 (skipping the cell defining
         `model`) and crashed with KeyError. The leak must be reported on
-        the real path, through cell 2.
+        the real path, through cell 2, using the user's names rather than
+        the parser's ~inline_ renames.
         """
         results = json.loads(nbharness(
                 filename=None,
@@ -148,8 +149,13 @@ class TestNBHarnessCLI(unittest.TestCase):
         self.assertEqual(results[0]["path"], [0, 1, 2, 3])
         err = results[0]["errors"][0]
         self.assertEqual((results[0]["cell_id"], err["line"]), (3, 2))
-        self.assertTrue(err["message"].startswith("Train/test overlap:"))
-        self.assertEqual((err["source"]["cell"], err["source"]["line"]), (2, 5))
+        self.assertEqual(err["label"], "X_local_test")
+        self.assertEqual(err["message"],
+            "Train/test overlap: `X_local_test` passed to `model.predict` (in `test_model`) shares rows "
+            "with `X_local_train` used by `model.fit` (in `train_model`, cell 2, line 5), so evaluation "
+            "scores are inflated.")
+        self.assertEqual(err["source"], {"cell": 2, "line": 5, "call": "model.fit",
+                                         "variable": "X_local_train", "function": "train_model"})
 
 if __name__ == "__main__":
     unittest.main()

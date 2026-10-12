@@ -272,6 +272,18 @@ class TestDataFrames(unittest.TestCase):
         a_state.condition(IntermediateRepresentations("", 2), Node("", None, line_number=3, path=1), errors)
         self.assertEqual(errors[0].source, predict_site)
 
+    def test_demangle_restores_inlined_names_and_leaves_others(self):
+        from types import SimpleNamespace
+        from nbcore.analyses.abs_states.dataleak_abs_state import demangle
+        cell_IR = SimpleNamespace(CFG=SimpleNamespace(inline_names={
+            "~inline_0_test_model_model": ("model", "test_model"),
+        }))
+        self.assertEqual(demangle("~inline_0_test_model_model.predict", cell_IR), ("model.predict", "test_model"))
+        self.assertEqual(demangle("lr.predict", cell_IR), ("lr.predict", None))
+        # unknown mangled-looking names are left alone rather than guessed at
+        self.assertEqual(demangle("~inline_9_g_x", cell_IR), ("~inline_9_g_x", None))
+        self.assertEqual(demangle(None, cell_IR), (None, None))
+
     def test_clone_assign_with_unknown_source_is_dull_not_keyerror(self):
         from types import SimpleNamespace
         from nbcore.analyses.dataleak_analysis import DataLeakAnalysis
