@@ -1,6 +1,6 @@
 import unittest
 
-from nbfix.code_checks import fits_on_test_data, undefined_reads, unused_results
+from nbfix.code_checks import first_binding, fits_on_test_data, misaligned_splits, undefined_reads, unused_results
 
 SPLIT = "X_train, X_test, y_train, y_test = train_test_split(X, y)"
 
@@ -27,7 +27,25 @@ class TestFitsOnTestData(unittest.TestCase):
                                     "lr.fit(X_train, y_train)", "lr.score(X_test, y_test)"), set())
 
 
+class TestMisalignedSplits(unittest.TestCase):
+    def test_labels_resplit_separately_from_features(self):
+        # The wrong fix qwen2.5-coder:14b gave for dataleak_two_leaks_true.py in run 5.
+        cells = {0: SPLIT, 1: "A = scaler.fit_transform(X_train)", 2: "b_train, b_test = train_test_split(y)",
+                 3: "model.fit(A, b_train)"}
+        self.assertEqual(misaligned_splits(cells), {("model.fit", "A", "b_train")})
+
+    def test_features_and_labels_from_the_same_split(self):
+        cells = {0: SPLIT, 1: "A = scaler.fit_transform(X_train)", 2: "model.fit(A, y_train)",
+                 3: "model.score(scaler.transform(X_test), y_test)"}
+        self.assertEqual(misaligned_splits(cells), set())
+
+
 class TestUndefinedReads(unittest.TestCase):
+    def test_first_binding(self):
+        self.assertEqual(first_binding({0: "a = 1", 1: "b, c = f()"}, "c"), 1)
+        self.assertIsNone(first_binding({0: "a = 1"}, "z"))
+        self.assertEqual(first_binding({0: "c = c + 1", 1: "c = 0"}, "c", after=0), 1)
+
     def test_read_before_a_later_cell_defines_it(self):
         self.assertEqual(undefined_reads({0: "a = b", 1: "b = 1"}), {"b": 0})
 

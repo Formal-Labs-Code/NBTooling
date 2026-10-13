@@ -145,10 +145,10 @@ class TestFix(unittest.TestCase):
         result = fix(notebook, client=_client(*[edits] * 3))
         self.assertEqual(result["status"], "unverified")
         self.assertEqual(result["problems"], [
-            "Cell 1 reads `X_train` before any earlier code defines it, so the patched code would fail "
-            "with a NameError; keep the cells in an order that runs top to bottom.",
-            "Cell 1 reads `y_train` before any earlier code defines it, so the patched code would fail "
-            "with a NameError; keep the cells in an order that runs top to bottom.",
+            f"Cell 1 reads `{name}` before any earlier code defines it, so the patched code would fail "
+            "with a NameError - it is only defined later, in cell 2: move this code into cell 2 after that "
+            "definition (or later), or move the definition up into an earlier cell."
+            for name in ("X_train", "y_train")
         ])
 
     def test_unused_preprocessing_result_is_rejected(self):

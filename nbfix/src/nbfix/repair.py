@@ -12,8 +12,9 @@ analysis reports, then re-runs the analysis on a patched copy. A patch is
   * every step a leak was traced to (scaler.fit, smote.fit_resample, ...)
     is still called, and its result is still used - stubbing out the
     preprocessing, or computing it and ignoring it, does too;
-  * it reads no name before an earlier cell defines it, and fits nothing on
-    test data (see code_checks).
+  * it reads no name before an earlier cell defines it, fits nothing on test
+    data, and never pairs features and labels from different splits (see
+    code_checks).
 A rejected attempt is retried with the reasons as feedback.
 
 Nothing is ever written back: the result is a proposal (edits plus a unified
@@ -29,7 +30,9 @@ from typing import Any
 
 from nbcore.resource_utils.script_loading import cell_start_lines, is_script
 
-from .code_checks import fits_on_test_data, parse_cell, undefined_reads, unused_results
+from .code_checks import (
+    first_binding, fits_on_test_data, misaligned_splits, parse_cell, undefined_reads, unused_results,
+)
 from .findings import analyze_data_leaks
 from .llm.repair_prompts import REPAIR_SYSTEM_PROMPT, build_repair_prompt
 
@@ -175,12 +178,23 @@ def _check(response, notebook, cells, editable, original) -> dict[str, Any]:
             "training split, and reuse that fitted object to transform the test data."
         )
 
+    for call, features, labels in sorted(misaligned_splits(patched_cells) - misaligned_splits(cells)):
+        problems.append(
+            f"`{call}({features}, {labels}, ...)` pairs features and labels from different "
+            "train_test_split calls, so the rows no longer match their labels; split features and "
+            "labels together in one call."
+        )
+
     already_undefined = undefined_reads(cells)
     for name, cell in sorted(undefined_reads(patched_cells).items(), key=lambda item: (item[1], item[0])):
         if name not in already_undefined:
+            defined_in = first_binding(patched_cells, name, after=cell)
+            where = (f"it is only defined later, in cell {defined_in}: move this code into cell {defined_in} "
+                     "after that definition (or later), or move the definition up into an earlier cell"
+                     if defined_in is not None else "nothing defines it")
             problems.append(
                 f"Cell {cell} reads `{name}` before any earlier code defines it, so the patched code "
-                "would fail with a NameError; keep the cells in an order that runs top to bottom."
+                f"would fail with a NameError - {where}."
             )
 
     return outcome

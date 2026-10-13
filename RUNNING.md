@@ -102,6 +102,12 @@ The file is never written. `--fix` prints JSON with a `status`
 repair - for a script, a diff of the file that `git apply` accepts; for a
 notebook, one diff per edited cell to read, not apply.
 
+The prompt holds the whole notebook. Ollama runs models with a 4096-token
+context by default and silently drops the start of a longer prompt, which
+a notebook of a few dozen cells can exceed; start Ollama with a larger
+context for those, e.g. `OLLAMA_CONTEXT_LENGTH=16384 ollama serve` (the
+OpenAI-compatible API NBFix uses can't set it per request).
+
 ### Scripts
 
 A `.py` script with `# %%` (VS Code / Jupytext) or `# In[ ]:` (Jupyter

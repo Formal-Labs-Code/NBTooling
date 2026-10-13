@@ -3,7 +3,8 @@ Plain-Python checks repair.py runs on a patch, for mistakes the data-leak
 analysis doesn't look at but that make a "fixed" notebook wrong anyway: reading
 a name before any earlier cell defines it (the patched notebook would raise
 NameError), computing a preprocessing step's result without ever using it, and
-fitting something on test data.
+fitting something on test data, and training or scoring on features and labels
+from different splits.
 
 All are approximations over the stdlib ast - names bound in any branch count
 as defined, a name counts as used if it is read anywhere later in the code,
@@ -28,6 +29,19 @@ _PREDEFINED = set(dir(builtins)) | {"__file__", "get_ipython", "display", "In", 
 
 def parse_cell(code: str) -> ast.Module:
     return ast.parse("\n".join("" if _MAGIC.match(line) else line for line in code.splitlines()))
+
+
+def first_binding(cells: dict[int, str], name: str, after: int = -1) -> int | None:
+    """The first cell after `after` that binds name at module level, if any."""
+    for cell_id, code in cells.items():
+        if cell_id <= after:
+            continue
+        names = _Names()
+        for statement in parse_cell(code).body:
+            names.visit(statement)
+        if name in names.binds:
+            return cell_id
+    return None
 
 
 def undefined_reads(cells: dict[int, str]) -> dict[str, int]:
@@ -93,6 +107,42 @@ def fits_on_test_data(cells: dict[int, str]) -> set[tuple[str, str]]:
                 if position < len(node.args) and isinstance(node.args[position], ast.Name) \
                         and node.args[position].id in test:
                     found.add((node.func.id, node.args[position].id))
+    return found
+
+
+def misaligned_splits(cells: dict[int, str]) -> set[tuple[str, str, str]]:
+    """(call, features, labels) for each fit/score/fit_resample call whose
+    features and labels come from different train_test_split calls - e.g.
+    features from one split, labels re-split separately - so rows and labels
+    no longer line up. Names are traced to their split flow-insensitively."""
+    nodes = [node for code in cells.values() for node in ast.walk(parse_cell(code))]
+    assigns = [node for node in nodes if isinstance(node, ast.Assign)]
+
+    origins: dict[str, set[int]] = {}
+    for split, assign in enumerate(a for a in assigns if _call_name(a.value) == "train_test_split"):
+        for name in (name for target in assign.targets for name in _stored(target)):
+            origins.setdefault(name, set()).add(split)
+    changed = True
+    while changed:
+        changed = False
+        for assign in assigns:
+            if _call_name(assign.value) == "train_test_split":
+                continue
+            reads = {node.id for node in ast.walk(assign.value) if isinstance(node, ast.Name)}
+            inherited = set().union(*(origins.get(name, set()) for name in reads))
+            for name in (name for target in assign.targets for name in _stored(target)):
+                if not inherited <= origins.get(name, set()):
+                    origins.setdefault(name, set()).update(inherited)
+                    changed = True
+
+    found = set()
+    for node in nodes:
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"fit", "score", "fit_resample"} and len(node.args) >= 2
+                and all(isinstance(arg, ast.Name) for arg in node.args[:2])):
+            features, labels = node.args[0].id, node.args[1].id
+            if origins.get(features) and origins.get(labels) and not origins[features] & origins[labels]:
+                found.add((ast.unparse(node.func), features, labels))
     return found
 
 
