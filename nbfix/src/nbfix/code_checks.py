@@ -2,12 +2,14 @@
 Plain-Python checks repair.py runs on a patch, for mistakes the data-leak
 analysis doesn't look at but that make a "fixed" notebook wrong anyway: reading
 a name before any earlier cell defines it (the patched notebook would raise
-NameError), and computing a preprocessing step's result without ever using it.
+NameError), computing a preprocessing step's result without ever using it, and
+fitting something on test data.
 
-Both are approximations over the stdlib ast - names bound in any branch count
-as defined, a name counts as used if it is read anywhere later in the code -
-and repair.py only acts on what a patch *adds* relative to the original, so
-quirks the original code already has are never blamed on the patch.
+All are approximations over the stdlib ast - names bound in any branch count
+as defined, a name counts as used if it is read anywhere later in the code,
+test data is tracked by name - and repair.py only acts on what a patch *adds*
+relative to the original, so quirks the original code already has are never
+blamed on the patch.
 
 `cells` is always {cell index: source} in execution order; IPython magic and
 shell lines are blanked before parsing.
@@ -19,6 +21,7 @@ import builtins
 import re
 
 _MAGIC = re.compile(r"^[!%]")
+_FIT_METHODS = {"fit", "fit_transform", "fit_resample"}
 # Names a notebook or script can read without defining them.
 _PREDEFINED = set(dir(builtins)) | {"__file__", "get_ipython", "display", "In", "Out"}
 
@@ -51,6 +54,76 @@ def unused_results(cells: dict[int, str], methods: set[str]) -> set[str]:
                 end = (position, node.end_lineno, node.end_col_offset)
                 assigned.extend((end, name) for target in node.targets for name in _stored(target))
     return {name for end, name in assigned if not any(at > end and read == name for at, read in loads)}
+
+
+def fits_on_test_data(cells: dict[int, str]) -> set[tuple[str, str]]:
+    """(call, test variable) for each fit/fit_transform/fit_resample whose
+    data comes from the test half of a train_test_split - directly
+    (`scaler.fit(X_test)`), or through a local function that fits on that
+    argument (`preprocess(X_test)` where preprocess calls fit_transform on
+    it). Test data is tracked by name, flow-insensitively: the odd-position
+    targets of a train_test_split, and anything assigned from them."""
+    trees = [parse_cell(code) for code in cells.values()]
+    nodes = [node for tree in trees for node in ast.walk(tree)]
+    assigns = [node for node in nodes if isinstance(node, ast.Assign)]
+
+    test = set()
+    for assign in assigns:
+        if _call_name(assign.value) == "train_test_split" and isinstance(assign.targets[0], ast.Tuple):
+            test |= {elt.id for elt in assign.targets[0].elts[1::2] if isinstance(elt, ast.Name)}
+    test = _derived(test, assigns)
+
+    # Local functions that fit on one of their parameters: name -> {position}.
+    fitting_params = {}
+    for function in (node for node in nodes if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        body = [node for node in ast.walk(function) if node is not function]
+        params = [arg.arg for arg in function.args.args]
+        for position, param in enumerate(params):
+            reached = _derived({param}, [node for node in body if isinstance(node, ast.Assign)])
+            if any(_fit_argument(node) in reached for node in body):
+                fitting_params.setdefault(function.name, set()).add(position)
+
+    found = set()
+    for node in nodes:
+        argument = _fit_argument(node)
+        if argument in test:
+            found.add((ast.unparse(node.func), argument))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            for position in fitting_params.get(node.func.id, ()):
+                if position < len(node.args) and isinstance(node.args[position], ast.Name) \
+                        and node.args[position].id in test:
+                    found.add((node.func.id, node.args[position].id))
+    return found
+
+
+def _call_name(node) -> str | None:
+    if not isinstance(node, ast.Call):
+        return None
+    return node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", None)
+
+
+def _fit_argument(node) -> str | None:
+    """The first argument of a `<receiver>.fit*(name, ...)` call, if a name."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _FIT_METHODS
+            and node.args and isinstance(node.args[0], ast.Name)):
+        return node.args[0].id
+    return None
+
+
+def _derived(names: set[str], assigns) -> set[str]:
+    """names, plus every name assigned from an expression reading one of them."""
+    names = set(names)
+    changed = True
+    while changed:
+        changed = False
+        for assign in assigns:
+            reads = {node.id for node in ast.walk(assign.value) if isinstance(node, ast.Name)}
+            if reads & names:
+                targets = {name for target in assign.targets for name in _stored(target)} - names
+                if targets:
+                    names |= targets
+                    changed = True
+    return names
 
 
 def _scan(statements, defined, undefined, cell_id):

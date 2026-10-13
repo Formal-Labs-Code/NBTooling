@@ -40,10 +40,10 @@ class TestFixVerifiesKnownGoodRepairs(unittest.TestCase):
     """These dataleak_*_true notebooks have a dataleak_*_false twin with the
     same cells and the leak fixed - answering with the twin's changed cells
     must be verified. (dataleak_false.ipynb is an unrelated notebook, not
-    dataleak_true.ipynb's twin.)"""
+    dataleak_true.ipynb's twin; dataleak_readexcel_score_false.ipynb refits
+    the scaler on the test split - no leak, but not a fix fix() accepts.)"""
 
-    PAIRS = ["dataleak_fit_transform_split", "dataleak_overlap", "dataleak_smote",
-             "dataleak_readexcel_score"]
+    PAIRS = ["dataleak_fit_transform_split", "dataleak_overlap", "dataleak_smote"]
 
     def test_clean_twin_is_verified(self):
         for name in self.PAIRS:
@@ -239,6 +239,24 @@ class TestFixScripts(unittest.TestCase):
 
         self.assertEqual(result["status"], "verified")
         self.assertEqual(self._git_apply("flat.py", source, result["diff"]), clean)
+
+    def test_fitting_a_scaler_on_the_test_split_is_rejected(self):
+        # The wrong fix qwen2.5-coder:14b gave in evaluation runs 1-3: no leak,
+        # but the test set is scaled with its own statistics.
+        source = Path(TEST_RES_PATH + "dataleak_script_helpers_true.py").read_text(encoding="utf-8")
+        refit = source.replace(
+            "    X = preprocess(X, scale=True)  # scaled before the split: leaks\n"
+            "    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n",
+            "    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n"
+            "    X_train = preprocess(X_train, scale=True)\n"
+            "    X_test = preprocess(X_test, scale=True)\n",
+        )
+        result = fix(script_to_notebook(source), client=_client(*[_edits((0, refit))] * 3), source=source)
+        self.assertEqual(result["status"], "unverified")
+        self.assertEqual(result["remaining_findings"], [])
+        self.assertEqual(result["problems"], [
+            "`preprocess` fits on test data (`X_test` comes from the test split); fit only on the "
+            "training split, and reuse that fitted object to transform the test data."])
 
     def test_cell_marker_script_diff_keeps_markers_and_removes_the_leak(self):
         source = Path(TEST_RES_PATH + "dataleak_script_cells_true.py").read_text(encoding="utf-8")

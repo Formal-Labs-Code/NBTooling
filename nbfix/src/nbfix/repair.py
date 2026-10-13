@@ -12,7 +12,8 @@ analysis reports, then re-runs the analysis on a patched copy. A patch is
   * every step a leak was traced to (scaler.fit, smote.fit_resample, ...)
     is still called, and its result is still used - stubbing out the
     preprocessing, or computing it and ignoring it, does too;
-  * it reads no name before an earlier cell defines it (see code_checks).
+  * it reads no name before an earlier cell defines it, and fits nothing on
+    test data (see code_checks).
 A rejected attempt is retried with the reasons as feedback.
 
 Nothing is ever written back: the result is a proposal (edits plus a unified
@@ -28,7 +29,7 @@ from typing import Any
 
 from nbcore.resource_utils.script_loading import cell_start_lines, is_script
 
-from .code_checks import parse_cell, undefined_reads, unused_results
+from .code_checks import fits_on_test_data, parse_cell, undefined_reads, unused_results
 from .findings import analyze_data_leaks
 from .llm.repair_prompts import REPAIR_SYSTEM_PROMPT, build_repair_prompt
 
@@ -166,6 +167,12 @@ def _check(response, notebook, cells, editable, original) -> dict[str, Any]:
         problems.append(
             f"`{name}` is computed by the preprocessing step but never used afterwards, so the step "
             "has no effect; use its result (for example, train on it)."
+        )
+
+    for call, variable in sorted(fits_on_test_data(patched_cells) - fits_on_test_data(cells)):
+        problems.append(
+            f"`{call}` fits on test data (`{variable}` comes from the test split); fit only on the "
+            "training split, and reuse that fitted object to transform the test data."
         )
 
     already_undefined = undefined_reads(cells)
