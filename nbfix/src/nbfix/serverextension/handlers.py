@@ -35,7 +35,7 @@ class EventHandler(APIHandler):
         sessions: SessionStore = self.settings["nbfix_sessions"]
 
         if event_name == "open_notebook":
-            session = sessions.get_or_create(notebook_id)
+            session = sessions.open(notebook_id)
         else:
             session = sessions.get(notebook_id)
             if session is None:

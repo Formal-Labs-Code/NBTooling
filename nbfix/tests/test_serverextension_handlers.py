@@ -33,6 +33,16 @@ async def test_open_notebook_returns_diagnostics(jp_fetch):
     assert "diagnostics" in payload
 
 
+async def test_reopening_a_notebook_without_closing_it_starts_a_fresh_session(jp_fetch):
+    # A page reload or crashed tab never sends close_notebook.
+    for _ in range(2):
+        code, payload = await _post_event(
+            jp_fetch, "open_notebook", "reloaded.ipynb", {"notebook_json": TEST_NOTEBOOK}
+        )
+        assert code == 200
+        assert payload["status"] == "success"
+
+
 async def test_unknown_event_returns_400(jp_fetch):
     notebook_id = "nb1.ipynb"
     await _post_event(

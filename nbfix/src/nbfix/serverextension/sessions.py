@@ -12,9 +12,11 @@ class SessionStore:
     def __init__(self):
         self._sessions: dict[str, AnalysisSession] = {}
 
-    def get_or_create(self, notebook_id: str) -> AnalysisSession:
-        if notebook_id not in self._sessions:
-            self._sessions[notebook_id] = new_session()
+    def open(self, notebook_id: str) -> AnalysisSession:
+        """A fresh session for the notebook, replacing any earlier one - a
+        page reload or crashed tab never sends close_notebook, and an
+        AnalysisSession can only be loaded once."""
+        self._sessions[notebook_id] = new_session()
         return self._sessions[notebook_id]
 
     def get(self, notebook_id: str):
