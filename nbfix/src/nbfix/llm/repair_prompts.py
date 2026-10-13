@@ -13,11 +13,17 @@ REPAIR_SYSTEM_PROMPT = """You fix data leakage in Python data science code: Jupy
 NBFix's static analysis reported the data leaks you are given. Treat them as real. There are two kinds:
 
 - "Preprocessing leak": a preprocessing step (scaler, imputer, encoder, feature selector, resampler, ...) was fitted on data before the train/test split, so statistics from the test rows leak into training. Fix it by splitting first, fitting the preprocessing step on the training split only, and then applying it (transform) to each split.
+
+Cells run top to bottom, and a cell can only use names defined in itself or in an earlier cell. When the split happens in a later cell than the preprocessing step, the preprocessing has to move after the split: put the split in the earlier cell and the preprocessing in the later one, or move the preprocessing into the split's cell after the split.
 - "Train/test overlap": a model was trained on data that includes the rows later used to evaluate it. Fix it by training on the training split only.
 
 Rules:
 - Make the smallest change that removes every listed leak. Keep everything else as it is: imports, names, comments, and what the code computes.
+- Copy every line you do not need to change exactly, including blank lines, spacing and formatting.
 - Keep the evaluation. Do not delete, comment out or skip the predict/score/evaluation calls where a leak is reported; fix where their data comes from instead.
+- Keep every preprocessing step. Do not remove it, stub it out, or replace or redefine a library class or function.
+- Fit each preprocessing step once, on the training split only, and reuse that same fitted object to transform the test split. Never fit anything on test data.
+- Whatever preprocessing the training data gets before training, the data passed to the evaluation calls must get too.
 - Only edit cells marked editable. Return the complete new source of each cell you change, and leave out cells you do not change.
 - Do not add new libraries.
 

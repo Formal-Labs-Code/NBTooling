@@ -8,7 +8,11 @@ analysis reports, then re-runs the analysis on a patched copy. A patch is
   * it raised no new analysis warnings - otherwise a leak could "disappear"
     just because the patch uses code the analysis can't model;
   * every call a leak was reported at (lr.predict, lr.score, ...) is still
-    there - deleting the evaluation also makes the leak go away.
+    there - deleting the evaluation also makes the leak go away;
+  * every step a leak was traced to (scaler.fit, smote.fit_resample, ...)
+    is still called, and its result is still used - stubbing out the
+    preprocessing, or computing it and ignoring it, does too;
+  * it reads no name before an earlier cell defines it (see code_checks).
 A rejected attempt is retried with the reasons as feedback.
 
 Nothing is ever written back: the result is a proposal (edits plus a unified
@@ -16,7 +20,6 @@ diff) for the user, or the agent calling the MCP tool, to apply.
 """
 from __future__ import annotations
 
-import ast
 import copy
 import difflib
 import re
@@ -25,6 +28,7 @@ from typing import Any
 
 from nbcore.resource_utils.script_loading import cell_start_lines, is_script
 
+from .code_checks import parse_cell, undefined_reads, unused_results
 from .findings import analyze_data_leaks
 from .llm.repair_prompts import REPAIR_SYSTEM_PROMPT, build_repair_prompt
 
@@ -34,6 +38,9 @@ DEFAULT_MAX_ATTEMPTS = 3
 _MAGIC = re.compile(r"^[!%]")
 # The sink call in a data-leak message: "`X_test` passed to `lr.score` ...".
 _SINK_CALL = re.compile(r"passed to `([^`]+)`")
+# Methods a repair may swap for each other at a leak's source: fit_transform
+# on all the data often becomes fit on the training split plus transform.
+_FIT_METHODS = {"fit", "fit_transform"}
 _FENCE = re.compile(r"^```[a-zA-Z]*\n(?P<code>.*?)\n?```\s*$", re.DOTALL)
 
 
@@ -140,6 +147,35 @@ def _check(response, notebook, cells, editable, original) -> dict[str, Any]:
         if f"{call}(" not in patched_code:
             problems.append(f"The `{call}` call where a leak was reported is gone; keep it and fix its input data instead.")
 
+    source_methods = set()
+    for call in sorted({f["source"]["call"] for f in original["findings"] if (f.get("source") or {}).get("call")}):
+        # The receiver may legitimately change (MinMaxScaler().fit_transform ->
+        # scaler.fit_transform), so only the method is required.
+        method = call.rsplit(".", 1)[-1]
+        methods = _FIT_METHODS if method in _FIT_METHODS else {method}
+        source_methods |= methods
+        if not any(f".{m}(" in patched_code for m in methods):
+            problems.append(
+                f"The `{call}` step a leak was traced to is no longer called; keep that step "
+                "and fit it on the training split instead of removing or replacing it."
+            )
+
+    patched_cells = _code_cells(patched)
+    already_unused = unused_results(cells, source_methods)
+    for name in sorted(unused_results(patched_cells, source_methods) - already_unused):
+        problems.append(
+            f"`{name}` is computed by the preprocessing step but never used afterwards, so the step "
+            "has no effect; use its result (for example, train on it)."
+        )
+
+    already_undefined = undefined_reads(cells)
+    for name, cell in sorted(undefined_reads(patched_cells).items(), key=lambda item: (item[1], item[0])):
+        if name not in already_undefined:
+            problems.append(
+                f"Cell {cell} reads `{name}` before any earlier code defines it, so the patched code "
+                "would fail with a NameError; keep the cells in an order that runs top to bottom."
+            )
+
     return outcome
 
 
@@ -166,7 +202,7 @@ def _parse_edits(response, cells, editable) -> tuple[list[dict[str, Any]], list[
         if code.rstrip() == cells[cell].rstrip():
             continue
         try:
-            ast.parse("\n".join("" if _MAGIC.match(line) else line for line in code.splitlines()))
+            parse_cell(code)
         except SyntaxError as exc:
             problems.append(f"Cell {cell} has a syntax error on line {exc.lineno}: {exc.msg}.")
             continue

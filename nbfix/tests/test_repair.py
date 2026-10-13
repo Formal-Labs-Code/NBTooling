@@ -117,6 +117,51 @@ class TestFix(unittest.TestCase):
         self.assertEqual(result["attempts"], 2)
         self.assertIn("The `lr.predict` call where a leak was reported is gone", _prompt(client, 1))
 
+    def test_stubbing_out_the_source_step_is_rejected(self):
+        notebook = read_json(TEST_RES_PATH + "dataleak_smote_true.ipynb")
+        stub = ("class SMOTE:\n    def fit_resample(self, X, y):\n        return X, y\n"
+                "smote = SMOTE()\nX_res, y_res = X, y")
+        result = fix(notebook, client=_client(*[_edits((1, stub))] * 3))
+        self.assertEqual(result["status"], "unverified")
+        self.assertEqual(result["remaining_findings"], [])
+        self.assertIn("The `smote.fit_resample` step a leak was traced to is no longer called", result["problems"][0])
+
+    def test_reading_a_name_before_it_is_defined_is_rejected(self):
+        # Resampling the train split in cell 1, before cell 2 splits the data.
+        notebook = read_json(TEST_RES_PATH + "dataleak_smote_true.ipynb")
+        edits = _edits(
+            (1, "smote = SMOTE()\nX_train, y_train = smote.fit_resample(X_train, y_train)"),
+            (2, "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)"),
+        )
+        result = fix(notebook, client=_client(*[edits] * 3))
+        self.assertEqual(result["status"], "unverified")
+        self.assertEqual(result["problems"], [
+            "Cell 1 reads `X_train` before any earlier code defines it, so the patched code would fail "
+            "with a NameError; keep the cells in an order that runs top to bottom.",
+            "Cell 1 reads `y_train` before any earlier code defines it, so the patched code would fail "
+            "with a NameError; keep the cells in an order that runs top to bottom.",
+        ])
+
+    def test_unused_preprocessing_result_is_rejected(self):
+        notebook = read_json(TEST_RES_PATH + "dataleak_smote_true.ipynb")
+        edits = _edits(
+            (1, "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)"),
+            (2, "smote = SMOTE()\nX_train_res, y_train_res = smote.fit_resample(X_train, y_train)"),
+        )  # cell 3 still trains on X_train, not X_train_res
+        result = fix(notebook, client=_client(*[edits] * 3))
+        self.assertEqual(result["status"], "unverified")
+        self.assertEqual(len(result["problems"]), 2)
+        self.assertIn("`X_train_res` is computed by the preprocessing step but never used", result["problems"][0])
+
+    def test_fit_transform_source_may_become_fit_plus_transform(self):
+        notebook = read_json(TEST_RES_PATH + "dataleak_readexcel_score_true.ipynb")
+        client = _client(_edits(
+            (1, "scaler = MinMaxScaler()"),
+            (2, "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n"
+                "scaler.fit(X_train)\nX_train = scaler.transform(X_train)\nX_test = scaler.transform(X_test)"),
+        ))
+        self.assertEqual(fix(notebook, client=client)["status"], "verified")
+
     def test_new_analysis_warning_is_rejected(self):
         unmodelled = self.fixed_cell_2 + "\nasync def later():\n    pass"
         result = fix(self.leaky, client=_client(*[_edits((2, unmodelled))] * 3))
