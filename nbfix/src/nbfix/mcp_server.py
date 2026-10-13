@@ -9,6 +9,7 @@ from nbcore.resource_utils.utils import read_json
 from nbcore.resource_utils.script_loading import script_to_notebook
 
 from .findings import analyze_data_leaks
+from .repair import fix as repair_fix
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -22,6 +23,12 @@ mcp = FastMCP("NBFix")
 
 
 def _coerce_notebook(notebook: Any) -> dict[str, Any]:
+    return _coerce_input(notebook)[0]
+
+
+def _coerce_input(notebook: Any) -> tuple[dict[str, Any], str | None, str | None]:
+    """(notebook dict, script source, file name): the source is kept for
+    script input so a repair's diff can be a diff of the script itself."""
     if notebook is None:
         raise ValueError("Notebook input is required.")
 
@@ -36,26 +43,27 @@ def _coerce_notebook(notebook: Any) -> dict[str, Any]:
                 raise ValueError("Notebook JSON string is not valid JSON.") from exc
             if not isinstance(payload, dict):
                 raise TypeError("Notebook JSON payload must decode to a dict/object.")
-            return _coerce_notebook(payload)
+            return _coerce_input(payload)
 
         if "\n" in raw:
             # Not JSON, and no path contains a newline: Python script source.
-            return script_to_notebook(str(notebook))
+            return script_to_notebook(str(notebook)), str(notebook), None
 
         candidate = Path(raw)
         if not candidate.exists():
             raise FileNotFoundError(f"Notebook path does not exist: {raw}")
         if candidate.suffix == ".py":
-            return script_to_notebook(candidate.read_text(encoding="utf-8"))
-        return read_json(str(candidate))
+            source = candidate.read_text(encoding="utf-8")
+            return script_to_notebook(source), source, candidate.name
+        return read_json(str(candidate)), None, candidate.name
 
     if hasattr(notebook, "read"):
-        return json.load(notebook)
+        return json.load(notebook), None, None
 
     if isinstance(notebook, dict):
         if isinstance(notebook.get("script"), str) and "cells" not in notebook:
-            return script_to_notebook(notebook["script"])
-        return notebook
+            return script_to_notebook(notebook["script"]), notebook["script"], None
+        return notebook, None, None
 
     raise TypeError(
         "Notebook input must be a dict, a JSON string, a file path, or a file-like object."
@@ -128,6 +136,28 @@ def analyze(notebook: str | dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     a no-op, or a local call it couldn't inline analyzed as an opaque call
     - so "no findings" for that code is not a guarantee of no leak."""
     return _analyze_impl(notebook)
+
+
+@mcp.tool()
+def fix(notebook: str | dict[str, Any], max_attempts: int = 3) -> dict[str, Any]:
+    """Suggest a repair for every data leak in a notebook or Python script, verified by NBFix.
+
+    Takes the same `notebook` input as `analyze`. An LLM (a local Ollama by
+    default; see NBCORE_LLM_BASE_URL/NBCORE_LLM_MODEL/NBCORE_LLM_API_KEY)
+    proposes whole-cell replacements, and NBFix re-analyzes the patched code.
+    A repair is "verified" only if no leaks remain, it adds no new analysis
+    warnings, and every call a leak was reported at is still there; rejected
+    attempts are retried with feedback, up to `max_attempts`.
+
+    Nothing is written. Returns {"status", "attempts", "findings", "warnings"}
+    plus, when a patch was produced, "edits" ([{"cell", "code"}], whole
+    replacement cells, numbered like `analyze`'s cells), "diff" (a unified
+    diff of the script file for script input, one diff per cell for a
+    notebook) and "explanation". status is "verified", "unverified" (adds
+    "problems" and "remaining_findings" - review before applying), "failed"
+    (no usable patch; adds "problems") or "no_findings"."""
+    payload, source, name = _coerce_input(notebook)
+    return repair_fix(payload, max_attempts=max_attempts, source=source, filename=name)
 
 
 def verify(notebook: str | dict[str, Any]) -> dict[str, Any]:

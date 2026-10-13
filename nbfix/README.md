@@ -31,8 +31,8 @@ Start the server over stdio:
 python -m nbfix.mcp_server
 ```
 
-The server exposes the primary tool `analyze`. The `verify` helper remains as
-an optional, best-effort runtime sanity check and is not the core NBFix
+The server exposes two tools, `analyze` and `fix`. The `verify` helper remains
+as an optional, best-effort runtime sanity check and is not the core NBFix
 contract.
 
 The `analyze` tool accepts a notebook (`.ipynb` path, or a notebook
@@ -44,6 +44,18 @@ analysis could only partly model - a statement using an unsupported construct
 opaque call). Each warning has `cell`, `line`, `message` and, for scripts,
 `file_line`. No findings for code with warnings is not a guarantee it has no
 leak.
+
+The `fix` tool takes the same input and suggests a repair for every data leak
+(it needs the `llm` extra too: `pip install -e './nbfix[mcp,llm]'`). An LLM -
+a local Ollama by default, configured with `NBCORE_LLM_BASE_URL`,
+`NBCORE_LLM_MODEL` and, for a hosted endpoint, `NBCORE_LLM_API_KEY` (set them
+in the MCP server's `env`) - proposes whole-cell replacements, and NBFix
+re-analyzes the patched code. The result is `verified` only if no leaks remain,
+the patch adds no new analysis warnings, and every call a leak was reported at
+is still there; rejected attempts are retried with feedback (`max_attempts`,
+default 3). Nothing is written: the result carries the `status`, the proposed
+`edits` (`[{"cell", "code"}]`), a unified `diff` (of the script file, for
+script input) and the LLM's `explanation`, for the caller to review and apply.
 
 ## Python scripts
 
