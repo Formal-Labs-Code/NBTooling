@@ -109,7 +109,12 @@ class DataLeakAnalysis(Analysis):
 
         if isinstance(cfg_node, AssignmentNode):
 
-            if isinstance(cfg_node.ast_node.value, ast.Name):
+            if not hasattr(cfg_node.ast_node, "value"):
+                # `with ... as name`: name is bound to whatever __enter__
+                # returns, which says nothing about the data - opaque.
+                as_transformed.state[cfg_node.left_hand_side] = DataLeakAbstractDomain(dull=True)
+
+            elif isinstance(cfg_node.ast_node.value, ast.Name):
                 '''
                 Plain variable to variable assignment.
                 '''

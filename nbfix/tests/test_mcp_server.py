@@ -64,6 +64,29 @@ class TestNBFixMCPServer(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertTrue(result[0]["message"].startswith("Preprocessing leak"))
 
+    def test_analyze_with_statements(self):
+        # A `with ... as name` target is opaque to the analysis - it must
+        # neither crash it nor hide a leak around it.
+        src = (
+            "import numpy as np\n"
+            "from sklearn.preprocessing import MinMaxScaler\n"
+            "from sklearn.model_selection import train_test_split\n"
+            "from sklearn.linear_model import LogisticRegression\n"
+            "with open('log.txt', 'w') as log:\n"
+            "    log.write('start')\n"
+            "X = np.genfromtxt('d.csv', delimiter=',')\n"
+            "y = np.random.choice(2, size=10)\n"
+            "X_scaled = MinMaxScaler().fit_transform(X)\n"
+            "X_train, X_test, y_train, y_test = train_test_split(X_scaled, y)\n"
+            "lr = LogisticRegression()\n"
+            "lr.fit(X_train, y_train)\n"
+            "with open('score.txt', 'w') as out:\n"
+            "    out.write(str(lr.score(X_test, y_test)))\n"
+        )
+        findings = analyze({"script": src})["findings"]
+        self.assertEqual([(f["sink"], f["locations"][0]["file_line"]) for f in findings], [("X_test", 14)])
+        self.assertEqual(analyze({"script": "with open('f') as fh:\n    data = fh.read()\n"})["findings"], [])
+
     def test_analyze_reports_degraded_code_as_warnings(self):
         src = (
             "import numpy as np\n"                       # 1
