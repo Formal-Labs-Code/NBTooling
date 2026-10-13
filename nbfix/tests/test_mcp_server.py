@@ -64,6 +64,24 @@ class TestNBFixMCPServer(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertTrue(result[0]["message"].startswith("Preprocessing leak"))
 
+    def test_analyze_more_preprocessing_and_multi_leak_fixtures(self):
+        expected = {
+            "dataleak_imputer_true.ipynb": [(3, "Preprocessing leak: `X_test` passed to `lr.score`")],
+            "dataleak_selectkbest_true.py": [(0, "Preprocessing leak: `X_test` passed to `lr.score`")],
+            "dataleak_two_leaks_true.ipynb": [(2, "Train/test overlap: `X_test` passed to `tree.predict`"),
+                                              (4, "Preprocessing leak: `Xs_test` passed to `lr.predict`")],
+            # Analysis stops a path at its first leak: the second model's leak
+            # only shows once the first is fixed.
+            "dataleak_two_leaks_true.py": [(0, "Preprocessing leak: `X_test` passed to `first.score`")],
+        }
+        for name, leaks in expected.items():
+            with self.subTest(name):
+                findings = analyze(TEST_RES_PATH + name)["findings"]
+                self.assertEqual(len(findings), len(leaks))
+                for finding, (cell, start) in zip(findings, leaks):
+                    self.assertEqual(finding["locations"][0]["cell"], cell)
+                    self.assertTrue(finding["message"].startswith(start), finding["message"])
+
     def test_analyze_with_statements(self):
         # A `with ... as name` target is opaque to the analysis - it must
         # neither crash it nor hide a leak around it.
