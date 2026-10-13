@@ -1,0 +1,831 @@
+[
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test_scaled",
+        "source": {
+          "cell": 2,
+          "line": 3,
+          "call": "scaler.fit",
+          "variable": "X"
+        },
+        "path": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 5,
+            "line": 1
+          },
+          {
+            "role": "source",
+            "cell": 2,
+            "line": 3
+          }
+        ],
+        "message": "Preprocessing leak: `X_test_scaled` passed to `lr.predict` is contaminated because `scaler.fit` (cell 2, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the preprocessing step to after the train/test split to prevent data leakage.",
+    "edits": [
+      {
+        "cell": 2,
+        "code": "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n\n# fit on the training split only\nscaler = StandardScaler()\nscaler.fit(X_train)"
+      }
+    ],
+    "diff": "--- a/dataleak_fit_transform_split_true.ipynb (cell 2)\n+++ b/dataleak_fit_transform_split_true.ipynb (cell 2)\n@@ -1,3 +1,5 @@\n-# fit on the WHOLE, unsplit X - the leak\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+\n+# fit on the training split only\n scaler = StandardScaler()\n-scaler.fit(X)\n+scaler.fit(X_train)\n",
+    "fixture": "tests/resources/dataleak_fit_transform_split_true.ipynb",
+    "seconds": 13.7
+  },
+  {
+    "status": "unverified",
+    "attempts": 3,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 1,
+          "line": 3,
+          "call": "imputer.fit_transform",
+          "variable": "X"
+        },
+        "path": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 3,
+            "line": 3
+          },
+          {
+            "role": "source",
+            "cell": 1,
+            "line": 3
+          }
+        ],
+        "message": "Preprocessing leak: `X_test` passed to `lr.score` is contaminated because `imputer.fit_transform` (cell 1, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the preprocessing step to cell 1 and applied it only to the training split. Moved the train/test split to cell 2 and applied the same preprocessing to the test split.",
+    "edits": [
+      {
+        "cell": 1,
+        "code": "imputer = SimpleImputer(strategy=\"mean\")\nX_train_filled = imputer.fit_transform(X_train)\n"
+      },
+      {
+        "cell": 2,
+        "code": "X_test, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\nX_test_filled = imputer.transform(X_test)\n"
+      }
+    ],
+    "diff": "--- a/dataleak_imputer_true.ipynb (cell 1)\n+++ b/dataleak_imputer_true.ipynb (cell 1)\n@@ -1,3 +1,2 @@\n-# fill missing values using statistics of ALL rows - the leak\n imputer = SimpleImputer(strategy=\"mean\")\n-X_filled = imputer.fit_transform(X)\n+X_train_filled = imputer.fit_transform(X_train)\n--- a/dataleak_imputer_true.ipynb (cell 2)\n+++ b/dataleak_imputer_true.ipynb (cell 2)\n@@ -1 +1,2 @@\n-X_train, X_test, y_train, y_test = train_test_split(X_filled, y, test_size=0.25, random_state=2)\n+X_test, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+X_test_filled = imputer.transform(X_test)\n",
+    "problems": [
+      "`X_train_filled` is computed by the preprocessing step but never used afterwards, so the step has no effect; use its result (for example, train on it).",
+      "Cell 1 reads `X_train` before any earlier code defines it, so the patched code would fail with a NameError - nothing defines it.",
+      "Cell 3 reads `y_train` before any earlier code defines it, so the patched code would fail with a NameError - nothing defines it."
+    ],
+    "remaining_findings": [],
+    "fixture": "tests/resources/dataleak_imputer_true.ipynb",
+    "seconds": 19.8
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 2,
+          "line": 3,
+          "call": "lr.fit",
+          "variable": "X"
+        },
+        "path": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 3,
+            "line": 1
+          },
+          {
+            "role": "source",
+            "cell": 2,
+            "line": 3
+          }
+        ],
+        "message": "Train/test overlap: `X_test` passed to `lr.predict` shares rows with `X` used by `lr.fit` (cell 2, line 3), so evaluation scores are inflated."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the train/test split to cell 2 and fit the model on the training split only.",
+    "edits": [
+      {
+        "cell": 2,
+        "code": "lr = LogisticRegression()\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\na = lr.fit(X_train, y_train)"
+      }
+    ],
+    "diff": "--- a/dataleak_overlap_true.ipynb (cell 2)\n+++ b/dataleak_overlap_true.ipynb (cell 2)\n@@ -1,3 +1,3 @@\n-# trains on ALL of X - including the rows that became X_test\n lr = LogisticRegression()\n-a = lr.fit(X, y)\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+a = lr.fit(X_train, y_train)\n",
+    "fixture": "tests/resources/dataleak_overlap_true.ipynb",
+    "seconds": 4.4
+  },
+  {
+    "status": "unverified",
+    "attempts": 3,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 1,
+          "line": 3,
+          "call": "scaler.fit_transform",
+          "variable": "X"
+        },
+        "path": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 4,
+            "line": 2
+          },
+          {
+            "role": "source",
+            "cell": 1,
+            "line": 3
+          }
+        ],
+        "message": "Preprocessing leak: `X_test` passed to `lr.score` is contaminated because `scaler.fit_transform` (cell 1, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the preprocessing step after the train/test split and reused the fitted scaler to transform both training and test sets. Ensured that the evaluation is done on the transformed test set.",
+    "edits": [
+      {
+        "cell": 1,
+        "code": "scaler = MinMaxScaler()\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\nX_scaled_train = scaler.fit_transform(X_train)\nX_scaled_test = scaler.transform(X_test)"
+      },
+      {
+        "cell": 3,
+        "code": "from sklearn.linear_model import LogisticRegression\nlr = LogisticRegression()\na = lr.fit(X_scaled_train, y_train)"
+      },
+      {
+        "cell": 4,
+        "code": "# .score() as the test-usage sink, instead of .predict()\nacc = lr.score(X_scaled_test, y_test)"
+      }
+    ],
+    "diff": "--- a/dataleak_readexcel_score_true.ipynb (cell 1)\n+++ b/dataleak_readexcel_score_true.ipynb (cell 1)\n@@ -1,3 +1,4 @@\n-# taint the WHOLE dataset before splitting\n scaler = MinMaxScaler()\n-X_scaled = scaler.fit_transform(X)\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+X_scaled_train = scaler.fit_transform(X_train)\n+X_scaled_test = scaler.transform(X_test)\n--- a/dataleak_readexcel_score_true.ipynb (cell 3)\n+++ b/dataleak_readexcel_score_true.ipynb (cell 3)\n@@ -1,3 +1,3 @@\n from sklearn.linear_model import LogisticRegression\n lr = LogisticRegression()\n-a = lr.fit(X_train, y_train)\n+a = lr.fit(X_scaled_train, y_train)\n--- a/dataleak_readexcel_score_true.ipynb (cell 4)\n+++ b/dataleak_readexcel_score_true.ipynb (cell 4)\n@@ -1,2 +1,2 @@\n # .score() as the test-usage sink, instead of .predict()\n-acc = lr.score(X_test, y_test)\n+acc = lr.score(X_scaled_test, y_test)\n",
+    "problems": [
+      "Cell 2 reads `X_scaled` before any earlier code defines it, so the patched code would fail with a NameError - nothing defines it."
+    ],
+    "remaining_findings": [],
+    "fixture": "tests/resources/dataleak_readexcel_score_true.ipynb",
+    "seconds": 21.3
+  },
+  {
+    "status": "unverified",
+    "attempts": 3,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 2,
+          "line": 2,
+          "call": "scaler.fit_transform",
+          "variable": "X"
+        },
+        "path": [
+          0,
+          2,
+          3,
+          2,
+          4
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 4,
+            "line": 3
+          },
+          {
+            "role": "source",
+            "cell": 2,
+            "line": 2
+          }
+        ],
+        "message": "Preprocessing leak: `X_test` passed to `lr.predict` is contaminated because `scaler.fit_transform` (cell 2, line 2) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the preprocessing steps into cell 3 after the train/test split and reused the same scaler object for both training and testing.",
+    "edits": [
+      {
+        "cell": 2,
+        "code": "scaler = MinMaxScaler()\nX_train_scaled = scaler.fit_transform(X_train)\nX_test_scaled = scaler.transform(X_test)"
+      },
+      {
+        "cell": 3,
+        "code": "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\nscaler = MinMaxScaler()\nX_train_scaled = scaler.fit_transform(X_train)\nX_test_scaled = scaler.transform(X_test)"
+      },
+      {
+        "cell": 4,
+        "code": "lr = LogisticRegression()\na = lr.fit(X_train_scaled, y_train)\ny_pred = lr.predict(X_test_scaled)"
+      }
+    ],
+    "diff": "--- a/dataleak_rebind_before_split_true.ipynb (cell 2)\n+++ b/dataleak_rebind_before_split_true.ipynb (cell 2)\n@@ -1,2 +1,3 @@\n scaler = MinMaxScaler()\n-X = scaler.fit_transform(X)\n+X_train_scaled = scaler.fit_transform(X_train)\n+X_test_scaled = scaler.transform(X_test)\n--- a/dataleak_rebind_before_split_true.ipynb (cell 3)\n+++ b/dataleak_rebind_before_split_true.ipynb (cell 3)\n@@ -1 +1,4 @@\n X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+scaler = MinMaxScaler()\n+X_train_scaled = scaler.fit_transform(X_train)\n+X_test_scaled = scaler.transform(X_test)\n--- a/dataleak_rebind_before_split_true.ipynb (cell 4)\n+++ b/dataleak_rebind_before_split_true.ipynb (cell 4)\n@@ -1,3 +1,3 @@\n lr = LogisticRegression()\n-a = lr.fit(X_train, y_train)\n-y_pred = lr.predict(X_test)\n+a = lr.fit(X_train_scaled, y_train)\n+y_pred = lr.predict(X_test_scaled)\n",
+    "problems": [
+      "Cell 2 reads `X_test` before any earlier code defines it, so the patched code would fail with a NameError - it is only defined later, in cell 3: move this code into cell 3 after that definition (or later), or move the definition up into an earlier cell.",
+      "Cell 2 reads `X_train` before any earlier code defines it, so the patched code would fail with a NameError - it is only defined later, in cell 3: move this code into cell 3 after that definition (or later), or move the definition up into an earlier cell."
+    ],
+    "remaining_findings": [],
+    "fixture": "tests/resources/dataleak_rebind_before_split_true.ipynb",
+    "seconds": 21.0
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_selected_test",
+        "source": {
+          "cell": 2,
+          "line": 3,
+          "call": "min_max_scaler.fit_transform",
+          "variable": "X",
+          "file_line": 20
+        },
+        "path": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 5,
+            "line": 2,
+            "file_line": 33
+          },
+          {
+            "role": "source",
+            "cell": 2,
+            "line": 3,
+            "file_line": 20
+          }
+        ],
+        "message": "Preprocessing leak: `X_selected_test` passed to `lr.predict` is contaminated because `min_max_scaler.fit_transform` (cell 2, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the train/test split before the feature selection and preprocessing. Applied the fitted scaler only to the training data, then applied it to the test data.",
+    "edits": [
+      {
+        "cell": 2,
+        "code": "min_max_scaler = MinMaxScaler()\n# split first\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.025, random_state=2)\n# then select features on the training set only\nX_selected_train = min_max_scaler.fit_transform(X_train)"
+      },
+      {
+        "cell": 3,
+        "code": "# apply the same scaler to the test set\nX_selected_test = min_max_scaler.transform(X_test)"
+      }
+    ],
+    "diff": "--- a/dataleak_script_cells_true.py\n+++ b/dataleak_script_cells_true.py\n@@ -16,12 +16,14 @@\n \n # %%\n min_max_scaler = MinMaxScaler()\n-# first select features\n-X_selected = min_max_scaler.fit_transform(X)\n+# split first\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.025, random_state=2)\n+# then select features on the training set only\n+X_selected_train = min_max_scaler.fit_transform(X_train)\n \n # %%\n-# then split\n-X_selected_train, X_selected_test, y_train, y_test = train_test_split(X_selected, y, test_size=0.025, random_state=2)\n+# apply the same scaler to the test set\n+X_selected_test = min_max_scaler.transform(X_test)\n \n # %%\n # fit a simple logistic regression\n",
+    "fixture": "tests/resources/dataleak_script_cells_true.py",
+    "seconds": 7.3
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 0,
+          "line": 11,
+          "call": "scaler.fit_transform",
+          "variable": "X",
+          "file_line": 11
+        },
+        "path": null,
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 0,
+            "line": 17,
+            "file_line": 17
+          },
+          {
+            "role": "source",
+            "cell": 0,
+            "line": 11,
+            "file_line": 11
+          }
+        ],
+        "message": "Preprocessing leak: `X_test` passed to `lr.score` is contaminated because `scaler.fit_transform` (cell 0, line 11) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the train/test split before the preprocessing step and applied scaling only to the training data. This ensures that no test-set statistics leak into the model during training.",
+    "edits": [
+      {
+        "cell": 0,
+        "code": "import numpy as np\nfrom sklearn.preprocessing import MinMaxScaler\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.linear_model import LogisticRegression\n\nX = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\ny = np.random.choice(2, size=10)\n\n# Splitting the dataset first\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n\n# Scaling only the training data\nscaler = MinMaxScaler()\nX_train_scaled = scaler.fit_transform(X_train)\nX_test_scaled = scaler.transform(X_test)\n\nlr = LogisticRegression()\nlr.fit(X_train_scaled, y_train)\naccuracy = lr.score(X_test_scaled, y_test)\nprint(accuracy)"
+      }
+    ],
+    "diff": "--- a/dataleak_script_flat_true.py\n+++ b/dataleak_script_flat_true.py\n@@ -6,13 +6,15 @@\n X = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\n y = np.random.choice(2, size=10)\n \n-# scaling the whole dataset before splitting leaks test-set statistics\n+# Splitting the dataset first\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+\n+# Scaling only the training data\n scaler = MinMaxScaler()\n-X_scaled = scaler.fit_transform(X)\n-\n-X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.25, random_state=2)\n+X_train_scaled = scaler.fit_transform(X_train)\n+X_test_scaled = scaler.transform(X_test)\n \n lr = LogisticRegression()\n-lr.fit(X_train, y_train)\n-accuracy = lr.score(X_test, y_test)\n+lr.fit(X_train_scaled, y_train)\n+accuracy = lr.score(X_test_scaled, y_test)\n print(accuracy)\n",
+    "fixture": "tests/resources/dataleak_script_flat_true.py",
+    "seconds": 9.6
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X",
+        "source": {
+          "cell": 0,
+          "line": 17,
+          "call": "scaler.fit_transform",
+          "variable": "X",
+          "function": "preprocess",
+          "file_line": 17
+        },
+        "path": null,
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 0,
+            "line": 21,
+            "file_line": 21
+          },
+          {
+            "role": "source",
+            "cell": 0,
+            "line": 17,
+            "file_line": 17
+          }
+        ],
+        "message": "Preprocessing leak: `X` passed to `model.score` (in `evaluate`) is contaminated because `scaler.fit_transform` (in `preprocess`, cell 0, line 17) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the preprocessing step after the train/test split to ensure that test-set statistics do not leak into the model.",
+    "edits": [
+      {
+        "cell": 0,
+        "code": "import numpy as np\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.linear_model import LogisticRegression\n\n\ndef load_data(path, delimiter=','):\n    if path.endswith('.npy'):\n        return np.load(path)\n    return np.genfromtxt(path, delimiter=delimiter, dtype=None)\n\n\ndef preprocess(X, scale=True):\n    if not scale:\n        return X\n    scaler = StandardScaler()\n    return scaler.fit_transform(X)\n\n\ndef evaluate(model, X, y):\n    print('accuracy:', model.score(X, y))\n\n\ndef main():\n    X = load_data('data.csv')\n    y = np.random.choice(2, size=10)\n    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n    X_train_scaled = preprocess(X_train, scale=True)  # scaled after the split\n    model = LogisticRegression()\n    model.fit(X_train_scaled, y_train)\n    evaluate(model, X=X_test, y=y_test)\n\n\nif __name__ == '__main__':\n    main()"
+      }
+    ],
+    "diff": "--- a/dataleak_script_helpers_true.py\n+++ b/dataleak_script_helpers_true.py\n@@ -4,8 +4,8 @@\n from sklearn.linear_model import LogisticRegression\n \n \n-def load_data(path, delimiter=\",\"):\n-    if path.endswith(\".npy\"):\n+def load_data(path, delimiter=','):\n+    if path.endswith('.npy'):\n         return np.load(path)\n     return np.genfromtxt(path, delimiter=delimiter, dtype=None)\n \n@@ -18,18 +18,18 @@\n \n \n def evaluate(model, X, y):\n-    print(\"accuracy:\", model.score(X, y))\n+    print('accuracy:', model.score(X, y))\n \n \n def main():\n-    X = load_data(\"data.csv\")\n+    X = load_data('data.csv')\n     y = np.random.choice(2, size=10)\n-    X = preprocess(X, scale=True)  # scaled before the split: leaks\n     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+    X_train_scaled = preprocess(X_train, scale=True)  # scaled after the split\n     model = LogisticRegression()\n-    model.fit(X_train, y_train)\n+    model.fit(X_train_scaled, y_train)\n     evaluate(model, X=X_test, y=y_test)\n \n \n-if __name__ == \"__main__\":\n+if __name__ == '__main__':\n     main()\n",
+    "fixture": "tests/resources/dataleak_script_helpers_true.py",
+    "seconds": 12.7
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 0,
+          "line": 10,
+          "call": "MinMaxScaler().fit_transform",
+          "variable": "X",
+          "function": "main",
+          "file_line": 10
+        },
+        "path": null,
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 0,
+            "line": 14,
+            "file_line": 14
+          },
+          {
+            "role": "source",
+            "cell": 0,
+            "line": 10,
+            "file_line": 10
+          }
+        ],
+        "message": "Preprocessing leak: `X_test` passed to `lr.score` (in `main`) is contaminated because `MinMaxScaler().fit_transform` (in `main`, cell 0, line 10) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the MinMaxScaler to after the train/test split. Fitted it on `X_train` and transformed both `X_train` and `X_test` accordingly.",
+    "edits": [
+      {
+        "cell": 0,
+        "code": "import numpy as np\nfrom sklearn.preprocessing import MinMaxScaler\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.linear_model import LogisticRegression\n\n\ndef main():\n    X = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\n    y = np.random.choice(2, size=10)\n    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n    scaler = MinMaxScaler()\n    X_train_scaled = scaler.fit_transform(X_train)\n    X_test_scaled = scaler.transform(X_test)\n    lr = LogisticRegression()\n    lr.fit(X_train_scaled, y_train)\n    accuracy = lr.score(X_test_scaled, y_test)\n    print(accuracy)\n\n\nif __name__ == \"__main__\":\n    main()"
+      }
+    ],
+    "diff": "--- a/dataleak_script_main_true.py\n+++ b/dataleak_script_main_true.py\n@@ -7,11 +7,13 @@\n def main():\n     X = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\n     y = np.random.choice(2, size=10)\n-    X_scaled = MinMaxScaler().fit_transform(X)\n-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.25, random_state=2)\n+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+    scaler = MinMaxScaler()\n+    X_train_scaled = scaler.fit_transform(X_train)\n+    X_test_scaled = scaler.transform(X_test)\n     lr = LogisticRegression()\n-    lr.fit(X_train, y_train)\n-    accuracy = lr.score(X_test, y_test)\n+    lr.fit(X_train_scaled, y_train)\n+    accuracy = lr.score(X_test_scaled, y_test)\n     print(accuracy)\n \n \n",
+    "fixture": "tests/resources/dataleak_script_main_true.py",
+    "seconds": 10.1
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 0,
+          "line": 9,
+          "call": "MinMaxScaler().fit_transform",
+          "variable": "X",
+          "file_line": 9
+        },
+        "path": null,
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 0,
+            "line": 15,
+            "file_line": 15
+          },
+          {
+            "role": "source",
+            "cell": 0,
+            "line": 9,
+            "file_line": 9
+          }
+        ],
+        "message": "Preprocessing leak: `X_test` passed to `lr.predict` is contaminated because `MinMaxScaler().fit_transform` (cell 0, line 9) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the MinMaxScaler fit to after the train/test split and applied it separately to both the training and test sets. This ensures that no test-set statistics leak into the model during preprocessing.",
+    "edits": [
+      {
+        "cell": 0,
+        "code": "import numpy as np\nfrom sklearn.preprocessing import MinMaxScaler\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.linear_model import LogisticRegression\nfrom sklearn.metrics import accuracy_score\n\nX = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\ny = np.random.choice(2, size=10)\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n\nscaler = MinMaxScaler()\nX_train_scaled = scaler.fit_transform(X_train)\nX_test_scaled = scaler.transform(X_test)\n\nlr = LogisticRegression()\nlr.fit(X_train_scaled, y_train)\n# the evaluation call is nested inside other calls\nprint(\"accuracy:\", accuracy_score(y_test, lr.predict(X_test_scaled)))"
+      }
+    ],
+    "diff": "--- a/dataleak_script_nested_call_true.py\n+++ b/dataleak_script_nested_call_true.py\n@@ -6,10 +6,13 @@\n \n X = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\n y = np.random.choice(2, size=10)\n-X_scaled = MinMaxScaler().fit_transform(X)\n-X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.25, random_state=2)\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+\n+scaler = MinMaxScaler()\n+X_train_scaled = scaler.fit_transform(X_train)\n+X_test_scaled = scaler.transform(X_test)\n \n lr = LogisticRegression()\n-lr.fit(X_train, y_train)\n+lr.fit(X_train_scaled, y_train)\n # the evaluation call is nested inside other calls\n-print(\"accuracy:\", accuracy_score(y_test, lr.predict(X_test)))\n+print(\"accuracy:\", accuracy_score(y_test, lr.predict(X_test_scaled)))\n",
+    "fixture": "tests/resources/dataleak_script_nested_call_true.py",
+    "seconds": 9.8
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 0,
+          "line": 11,
+          "call": "selector.fit_transform",
+          "variable": "X",
+          "file_line": 11
+        },
+        "path": null,
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 0,
+            "line": 17,
+            "file_line": 17
+          },
+          {
+            "role": "source",
+            "cell": 0,
+            "line": 11,
+            "file_line": 11
+          }
+        ],
+        "message": "Preprocessing leak: `X_test` passed to `lr.score` is contaminated because `selector.fit_transform` (cell 0, line 11) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the feature selection step after the train/test split. The training data is used to fit the selector, and then both the training and test data are transformed using the same fitted selector.",
+    "edits": [
+      {
+        "cell": 0,
+        "code": "import numpy as np\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.linear_model import LogisticRegression\nfrom sklearn.feature_selection import SelectKBest, f_classif\n\nX = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\ny = np.random.choice(2, size=10)\n\n# Split the data first\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n\n# Then perform feature selection on the training split only\nselector = SelectKBest(f_classif, k=2)\nX_selected_train = selector.fit_transform(X_train, y_train)\nX_selected_test = selector.transform(X_test)\n\nlr = LogisticRegression()\nlr.fit(X_selected_train, y_train)\nprint(\"accuracy:\", lr.score(X_selected_test, y_test))"
+      }
+    ],
+    "diff": "--- a/dataleak_selectkbest_true.py\n+++ b/dataleak_selectkbest_true.py\n@@ -6,12 +6,14 @@\n X = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\n y = np.random.choice(2, size=10)\n \n-# feature selection looks at the labels of ALL rows before the split - the leak\n+# Split the data first\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+\n+# Then perform feature selection on the training split only\n selector = SelectKBest(f_classif, k=2)\n-X_selected = selector.fit_transform(X, y)\n-\n-X_train, X_test, y_train, y_test = train_test_split(X_selected, y, test_size=0.25, random_state=2)\n+X_selected_train = selector.fit_transform(X_train, y_train)\n+X_selected_test = selector.transform(X_test)\n \n lr = LogisticRegression()\n-lr.fit(X_train, y_train)\n-print(\"accuracy:\", lr.score(X_test, y_test))\n+lr.fit(X_selected_train, y_train)\n+print(\"accuracy:\", lr.score(X_selected_test, y_test))\n",
+    "fixture": "tests/resources/dataleak_selectkbest_true.py",
+    "seconds": 10.3
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_local_test",
+        "source": {
+          "cell": 2,
+          "line": 5,
+          "call": "model.fit",
+          "variable": "X_local_train",
+          "function": "train_model"
+        },
+        "path": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 3,
+            "line": 2
+          },
+          {
+            "role": "source",
+            "cell": 2,
+            "line": 5
+          }
+        ],
+        "message": "Train/test overlap: `X_local_test` passed to `model.predict` (in `test_model`) shares rows with `X_local_train` used by `model.fit` (in `train_model`, cell 2, line 5), so evaluation scores are inflated."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the train/test split to cell 2 and ensured that `model.fit` is only called with training data. The evaluation in cell 3 now uses the test set correctly.",
+    "edits": [
+      {
+        "cell": 2,
+        "code": "model = LogisticRegression()\n\n# `model` parameter shadows the global `model` passed in below\ndef train_model(X_local_train, y_local_train, model):\n    model.fit(X_local_train, y_local_train)\n\ntrain_model(X_train, y_train, model)"
+      }
+    ],
+    "diff": "--- a/dataleak_shadowed_param_true.ipynb (cell 2)\n+++ b/dataleak_shadowed_param_true.ipynb (cell 2)\n@@ -4,4 +4,4 @@\n def train_model(X_local_train, y_local_train, model):\n     model.fit(X_local_train, y_local_train)\n \n-train_model(X, y, model)\n+train_model(X_train, y_train, model)\n",
+    "fixture": "tests/resources/dataleak_shadowed_param_true.ipynb",
+    "seconds": 7.2
+  },
+  {
+    "status": "unverified",
+    "attempts": 3,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 1,
+          "line": 5,
+          "call": "smote.fit_resample",
+          "variable": "X"
+        },
+        "path": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 4,
+            "line": 1
+          },
+          {
+            "role": "source",
+            "cell": 1,
+            "line": 5
+          }
+        ],
+        "message": "Preprocessing leak: `X_test` passed to `lr.predict` is contaminated because `smote.fit_resample` (cell 1, line 5) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the SMOTE resampling step after the train/test split in cell 1 and used the transformed training data for fitting the model.",
+    "edits": [
+      {
+        "cell": 1,
+        "code": "from imblearn.over_sampling import SMOTE\nsmote = SMOTE()\nX_res, y_res = smote.fit_resample(X_train, y_train)"
+      },
+      {
+        "cell": 2,
+        "code": "from sklearn.model_selection import train_test_split\n# then split\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n"
+      }
+    ],
+    "diff": "--- a/dataleak_smote_true.ipynb (cell 1)\n+++ b/dataleak_smote_true.ipynb (cell 1)\n@@ -1,5 +1,3 @@\n-# resample the WHOLE dataset before splitting - a real leak: synthetic\n-# samples can be generated from neighbors that end up split across\n-# train and test\n+from imblearn.over_sampling import SMOTE\n smote = SMOTE()\n-X_res, y_res = smote.fit_resample(X, y)\n+X_res, y_res = smote.fit_resample(X_train, y_train)\n--- a/dataleak_smote_true.ipynb (cell 2)\n+++ b/dataleak_smote_true.ipynb (cell 2)\n@@ -1,2 +1,3 @@\n+from sklearn.model_selection import train_test_split\n # then split\n-X_train, X_test, y_train, y_test = train_test_split(X_res, y_res, test_size=0.25, random_state=2)\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n",
+    "problems": [
+      "`X_res` is computed by the preprocessing step but never used afterwards, so the step has no effect; use its result (for example, train on it).",
+      "`y_res` is computed by the preprocessing step but never used afterwards, so the step has no effect; use its result (for example, train on it).",
+      "Cell 1 reads `X_train` before any earlier code defines it, so the patched code would fail with a NameError - it is only defined later, in cell 2: move this code into cell 2 after that definition (or later), or move the definition up into an earlier cell.",
+      "Cell 1 reads `y_train` before any earlier code defines it, so the patched code would fail with a NameError - it is only defined later, in cell 2: move this code into cell 2 after that definition (or later), or move the definition up into an earlier cell."
+    ],
+    "remaining_findings": [],
+    "fixture": "tests/resources/dataleak_smote_true.ipynb",
+    "seconds": 22.1
+  },
+  {
+    "status": "unverified",
+    "attempts": 3,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_selected_test",
+        "source": {
+          "cell": 1,
+          "line": 3,
+          "call": "min_max_scaler.fit_transform",
+          "variable": "X"
+        },
+        "path": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 4,
+            "line": 2
+          },
+          {
+            "role": "source",
+            "cell": 1,
+            "line": 3
+          }
+        ],
+        "message": "Preprocessing leak: `X_selected_test` passed to `lr.predict` is contaminated because `min_max_scaler.fit_transform` (cell 1, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the train/test split to cell 1 before fitting the MinMaxScaler. This ensures that no test-set statistics leak into the model during preprocessing. The prediction and evaluation in cell 4 remain unchanged.",
+    "edits": [
+      {
+        "cell": 1,
+        "code": "min_max_scaler = MinMaxScaler()\n# split first\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.025, random_state=2)\n# then select features and scale on the training set only\nX_selected_train = min_max_scaler.fit_transform(X_train)\nX_selected_test = min_max_scaler.transform(X_test)"
+      }
+    ],
+    "diff": "--- a/dataleak_true.ipynb (cell 1)\n+++ b/dataleak_true.ipynb (cell 1)\n@@ -1,3 +1,6 @@\n min_max_scaler = MinMaxScaler()\n-# first select features\n-X_selected = min_max_scaler.fit_transform(X)\n+# split first\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.025, random_state=2)\n+# then select features and scale on the training set only\n+X_selected_train = min_max_scaler.fit_transform(X_train)\n+X_selected_test = min_max_scaler.transform(X_test)\n",
+    "problems": [
+      "Cell 2 reads `X_selected` before any earlier code defines it, so the patched code would fail with a NameError - nothing defines it."
+    ],
+    "remaining_findings": [],
+    "fixture": "tests/resources/dataleak_true.ipynb",
+    "seconds": 23.0
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 2,
+          "line": 3,
+          "call": "tree.fit",
+          "variable": "X"
+        },
+        "path": [
+          0,
+          1,
+          2
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 2,
+            "line": 4
+          },
+          {
+            "role": "source",
+            "cell": 2,
+            "line": 3
+          }
+        ],
+        "message": "Train/test overlap: `X_test` passed to `tree.predict` shares rows with `X` used by `tree.fit` (cell 2, line 3), so evaluation scores are inflated."
+      },
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "Xs_test",
+        "source": {
+          "cell": 3,
+          "line": 3,
+          "call": "scaler.fit_transform",
+          "variable": "X"
+        },
+        "path": [
+          0,
+          1,
+          3,
+          2,
+          4
+        ],
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 4,
+            "line": 3
+          },
+          {
+            "role": "source",
+            "cell": 3,
+            "line": 3
+          }
+        ],
+        "message": "Preprocessing leak: `Xs_test` passed to `lr.predict` is contaminated because `scaler.fit_transform` (cell 3, line 3) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the train/test split to cell 2 and applied preprocessing only on the training split in cell 3. This removes both the train/test overlap and preprocessing leak.",
+    "edits": [
+      {
+        "cell": 2,
+        "code": "tree = DecisionTreeClassifier()\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\ntree.fit(X_train, y_train)\ntree_pred = tree.predict(X_test)"
+      },
+      {
+        "cell": 3,
+        "code": "scaler = MinMaxScaler()\nXs_train, Xs_test, ys_train, ys_test = train_test_split(X, y, test_size=0.25, random_state=2)\nX_scaled_train = scaler.fit_transform(Xs_train)\nX_scaled_test = scaler.transform(Xs_test)"
+      },
+      {
+        "cell": 4,
+        "code": "lr = LogisticRegression()\nlr.fit(X_scaled_train, ys_train)\nlr_pred = lr.predict(X_scaled_test)"
+      }
+    ],
+    "diff": "--- a/dataleak_two_leaks_true.ipynb (cell 2)\n+++ b/dataleak_two_leaks_true.ipynb (cell 2)\n@@ -1,4 +1,4 @@\n-# model 1 trains on ALL rows, including the test rows - overlap leak\n tree = DecisionTreeClassifier()\n-tree.fit(X, y)\n+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+tree.fit(X_train, y_train)\n tree_pred = tree.predict(X_test)\n--- a/dataleak_two_leaks_true.ipynb (cell 3)\n+++ b/dataleak_two_leaks_true.ipynb (cell 3)\n@@ -1,4 +1,4 @@\n-# model 2: features scaled with statistics of ALL rows - preprocessing leak\n scaler = MinMaxScaler()\n-X_scaled = scaler.fit_transform(X)\n-Xs_train, Xs_test, ys_train, ys_test = train_test_split(X_scaled, y, test_size=0.25, random_state=2)\n+Xs_train, Xs_test, ys_train, ys_test = train_test_split(X, y, test_size=0.25, random_state=2)\n+X_scaled_train = scaler.fit_transform(Xs_train)\n+X_scaled_test = scaler.transform(Xs_test)\n--- a/dataleak_two_leaks_true.ipynb (cell 4)\n+++ b/dataleak_two_leaks_true.ipynb (cell 4)\n@@ -1,3 +1,3 @@\n lr = LogisticRegression()\n-lr.fit(Xs_train, ys_train)\n-lr_pred = lr.predict(Xs_test)\n+lr.fit(X_scaled_train, ys_train)\n+lr_pred = lr.predict(X_scaled_test)\n",
+    "fixture": "tests/resources/dataleak_two_leaks_true.ipynb",
+    "seconds": 10.5
+  },
+  {
+    "status": "verified",
+    "attempts": 1,
+    "findings": [
+      {
+        "leakage_type": "Data Leak Analysis",
+        "sink": "X_test",
+        "source": {
+          "cell": 0,
+          "line": 13,
+          "call": "SimpleImputer(strategy='median').fit_transform",
+          "variable": "X",
+          "function": "main",
+          "file_line": 13
+        },
+        "path": null,
+        "locations": [
+          {
+            "role": "sink",
+            "cell": 0,
+            "line": 22,
+            "file_line": 22
+          },
+          {
+            "role": "source",
+            "cell": 0,
+            "line": 13,
+            "file_line": 13
+          }
+        ],
+        "message": "Preprocessing leak: `X_test` passed to `first.score` (in `main`) is contaminated because `SimpleImputer(strategy='median').fit_transform` (in `main`, cell 0, line 13) ran on unsplit `X` before the train/test split, so test-set statistics leak into the model."
+      }
+    ],
+    "warnings": [],
+    "explanation": "Moved the train/test split to the beginning of the cell and applied preprocessing steps (imputation and scaling) only on the training split. This ensures that no test-set statistics leak into the model.",
+    "edits": [
+      {
+        "cell": 0,
+        "code": "import numpy as np\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.linear_model import LogisticRegression\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.impute import SimpleImputer\n\n\ndef main():\n    X = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\n    y = np.random.choice(2, size=10)\n\n    # Split first\n    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n\n    # Impute on training split only\n    imputer = SimpleImputer(strategy=\"median\")\n    X_train_imputed = imputer.fit_transform(X_train)\n    X_test_imputed = imputer.transform(X_test)\n\n    # Scale on training split only\n    scaler = StandardScaler()\n    A_train_scaled = scaler.fit_transform(X_train_imputed)\n    A_test_scaled = scaler.transform(X_test_imputed)\n\n    first = LogisticRegression()\n    first.fit(X_train_imputed, y_train)\n    print(\"first:\", first.score(X_test_imputed, y_test))\n\n    second = LogisticRegression()\n    second.fit(A_train_scaled, b_train)\n    print(\"second:\", second.score(A_test_scaled, b_test))\n\n\nif __name__ == \"__main__\":\n    main()"
+      }
+    ],
+    "diff": "--- a/dataleak_two_leaks_true.py\n+++ b/dataleak_two_leaks_true.py\n@@ -9,21 +9,26 @@\n     X = np.genfromtxt(\"data.csv\", delimiter=\",\", dtype=None)\n     y = np.random.choice(2, size=10)\n \n-    # leak 1: impute with statistics of all rows\n-    X = SimpleImputer(strategy=\"median\").fit_transform(X)\n+    # Split first\n     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)\n \n-    # leak 2: a second model scales all rows before its own split\n-    X_all_scaled = StandardScaler().fit_transform(X)\n-    A_train, A_test, b_train, b_test = train_test_split(X_all_scaled, y, test_size=0.3, random_state=3)\n+    # Impute on training split only\n+    imputer = SimpleImputer(strategy=\"median\")\n+    X_train_imputed = imputer.fit_transform(X_train)\n+    X_test_imputed = imputer.transform(X_test)\n+\n+    # Scale on training split only\n+    scaler = StandardScaler()\n+    A_train_scaled = scaler.fit_transform(X_train_imputed)\n+    A_test_scaled = scaler.transform(X_test_imputed)\n \n     first = LogisticRegression()\n-    first.fit(X_train, y_train)\n-    print(\"first:\", first.score(X_test, y_test))\n+    first.fit(X_train_imputed, y_train)\n+    print(\"first:\", first.score(X_test_imputed, y_test))\n \n     second = LogisticRegression()\n-    second.fit(A_train, b_train)\n-    print(\"second:\", second.score(A_test, b_test))\n+    second.fit(A_train_scaled, b_train)\n+    print(\"second:\", second.score(A_test_scaled, b_test))\n \n \n if __name__ == \"__main__\":\n",
+    "fixture": "tests/resources/dataleak_two_leaks_true.py",
+    "seconds": 14.8
+  }
+]
