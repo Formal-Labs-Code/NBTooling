@@ -175,6 +175,34 @@ def misaligned_splits(cells: dict[int, str]) -> set[tuple[str, str, str]]:
     return found
 
 
+def split_origin(cells: dict[int, str], name: str) -> tuple[int, str] | None:
+    """(cell, source line) of the train_test_split that `name` comes from -
+    directly, as one of its targets, or through assignments in between - or
+    None. With several candidates, the last one in the notebook."""
+    defs = []  # (cell, assign, names it binds)
+    for cell_id, code in cells.items():
+        for node in ast.walk(parse_cell(code)):
+            if isinstance(node, ast.Assign):
+                defs.append((cell_id, node, {n for t in node.targets for n in _stored(t)}))
+    splits, seen, frontier = [], {name}, [name]
+    while frontier:
+        current = frontier.pop()
+        for cell_id, assign, bound in defs:
+            if current not in bound:
+                continue
+            if _call_name(assign.value) == "train_test_split":
+                lines = cells[cell_id].splitlines()
+                splits.append((cell_id, assign.lineno, lines[assign.lineno - 1].strip()))
+                continue
+            for read in {node.id for node in ast.walk(assign.value) if isinstance(node, ast.Name)} - seen:
+                seen.add(read)
+                frontier.append(read)
+    if not splits:
+        return None
+    cell_id, _, text = max(splits)
+    return cell_id, text
+
+
 def _call_name(node) -> str | None:
     if not isinstance(node, ast.Call):
         return None

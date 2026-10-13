@@ -81,6 +81,9 @@ class TestFix(unittest.TestCase):
         self.assertIn("Preprocessing leak: `X_test_scaled` passed to `lr.predict`", prompt)
         self.assertIn("Reported at: cell 5, line 1: `y_pred = lr.predict(X_test_scaled)`", prompt)
         self.assertIn("Caused by: cell 2, line 3: `scaler.fit(X)`", prompt)
+        self.assertIn("The evaluated data comes from the split in cell 1: "
+                      "`X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)`",
+                      prompt)
 
     def test_input_notebook_is_not_modified(self):
         before = copy.deepcopy(self.leaky)
@@ -116,8 +119,13 @@ class TestFix(unittest.TestCase):
         self.assertEqual(result["attempts"], 3)
         self.assertEqual(len(result["remaining_findings"]), 1)
         self.assertIn("NBFix still reports: Preprocessing leak", result["problems"][0])
-        self.assertIn("## Your previous attempt was rejected", _prompt(client, 1))
+        self.assertIn("## Your attempt 1 was rejected", _prompt(client, 1))
         self.assertIn("NBFix still reports", _prompt(client, 1))
+        self.assertIn("(`X_test_scaled` comes from the split in cell 1: `X_train, X_test", _prompt(client, 1))
+        # The second rejected attempt repeats the first, and the feedback says so.
+        self.assertNotIn("same fix as your attempt", _prompt(client, 1))
+        self.assertIn("## Your attempt 2 was rejected", _prompt(client, 2))
+        self.assertIn("This was the same fix as your attempt 1", _prompt(client, 2))
 
     def test_deleting_the_sink_call_is_rejected(self):
         client = _client(_edits((5, "y_pred = None")), _edits((2, self.fixed_cell_2)))

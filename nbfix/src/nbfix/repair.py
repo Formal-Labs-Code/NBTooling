@@ -31,7 +31,8 @@ from typing import Any
 from nbcore.resource_utils.script_loading import cell_start_lines, is_script
 
 from .code_checks import (
-    first_binding, fits_on_test_data, misaligned_splits, parse_cell, undefined_reads, unused_results,
+    first_binding, fits_on_test_data, misaligned_splits, parse_cell, split_origin, undefined_reads,
+    unused_results,
 )
 from .findings import analyze_data_leaks
 from .llm.repair_prompts import REPAIR_SYSTEM_PROMPT, build_repair_prompt
@@ -79,7 +80,7 @@ def fix(notebook: dict, *, client=None, max_attempts: int = DEFAULT_MAX_ATTEMPTS
     editable = _editable_cells(original["findings"], cells)
     leaks = [_describe(finding, cells) for finding in original["findings"]]
 
-    previous, last_analyzed = None, None
+    previous, last_analyzed, tried = None, None, []
     for attempt in range(1, max_attempts + 1):
         prompt = build_repair_prompt(list(cells.items()), editable, leaks, original["warnings"], previous)
         try:
@@ -93,7 +94,9 @@ def fix(notebook: dict, *, client=None, max_attempts: int = DEFAULT_MAX_ATTEMPTS
             return {**result, "status": "verified", **_proposal(outcome, notebook, cells, source, filename)}
         if "remaining_findings" in outcome:
             last_analyzed = outcome
-        previous = {"edits": outcome["edits"], "problems": outcome["problems"]}
+        repeats = next((n for n, edits in enumerate(tried, 1) if edits and edits == outcome["edits"]), None)
+        tried.append(outcome["edits"])
+        previous = {"attempt": attempt, "edits": outcome["edits"], "problems": outcome["problems"], "repeats": repeats}
 
     if last_analyzed is not None:
         return {
@@ -134,8 +137,11 @@ def _check(response, notebook, cells, editable, original) -> dict[str, Any]:
         return outcome
 
     outcome["remaining_findings"] = after["findings"]
+    patched_cells = _code_cells(patched)
     for finding in after["findings"]:
-        problems.append(f"NBFix still reports: {finding['message']}")
+        split = split_origin(patched_cells, finding["sink"]) if finding.get("sink") else None
+        where = f" (`{finding['sink']}` comes from the split in cell {split[0]}: `{split[1]}`)" if split else ""
+        problems.append(f"NBFix still reports: {finding['message']}{where}")
 
     new_warnings = Counter(w["message"] for w in after["warnings"]) - Counter(w["message"] for w in original["warnings"])
     for warning in after["warnings"]:
@@ -146,7 +152,7 @@ def _check(response, notebook, cells, editable, original) -> dict[str, Any]:
                 f"({warning['message']}); write it without that construct."
             )
 
-    patched_code = "\n".join(_code_cells(patched).values())
+    patched_code = "\n".join(patched_cells.values())
     for call in sorted({m.group(1) for f in original["findings"] if (m := _SINK_CALL.search(f["message"]))}):
         if f"{call}(" not in patched_code:
             problems.append(f"The `{call}` call where a leak was reported is gone; keep it and fix its input data instead.")
@@ -164,7 +170,6 @@ def _check(response, notebook, cells, editable, original) -> dict[str, Any]:
                 "and fit it on the training split instead of removing or replacing it."
             )
 
-    patched_cells = _code_cells(patched)
     already_unused = unused_results(cells, source_methods)
     for name in sorted(unused_results(patched_cells, source_methods) - already_unused):
         problems.append(
@@ -315,7 +320,9 @@ def _describe(finding, cells) -> dict[str, Any]:
         cell, line = location["cell"], location["line"]
         return cell, line, _line_text(cells.get(cell, ""), line)
 
-    return {"message": finding["message"], "sink": where("sink"), "source": where("source")}
+    sink = finding.get("sink")
+    split = split_origin(cells, sink) if sink else None
+    return {"message": finding["message"], "sink": where("sink"), "source": where("source"), "split": split}
 
 
 def _line_text(code: str, line) -> str | None:
