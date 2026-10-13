@@ -198,7 +198,7 @@ def _parse_edits(response, cells, editable) -> tuple[list[dict[str, Any]], list[
         if cell not in editable:
             problems.append(f"Cell {cell} is not editable.")
             continue
-        code = _strip_fence(code)
+        code = _keep_original_formatting(cells[cell], _strip_fence(code))
         if code.rstrip() == cells[cell].rstrip():
             continue
         try:
@@ -216,6 +216,50 @@ def _parse_edits(response, cells, editable) -> tuple[list[dict[str, Any]], list[
 def _strip_fence(code: str) -> str:
     match = _FENCE.match(code.strip())
     return match.group("code") if match else code
+
+
+def _keep_original_formatting(original: str, code: str) -> str:
+    """The model's cell with formatting-only changes undone. Lines are matched
+    on their content ignoring whitespace inside them (indentation counts - it
+    is Python syntax); a matched line keeps its original text and the blank
+    lines before it, and only changed or new lines come from the model.
+    Models rewriting a whole cell (a script without cell markers is one)
+    otherwise reformat lines they had no reason to touch."""
+    old, old_gaps, old_tail = _split_blank_lines(original)
+    new, new_gaps, _ = _split_blank_lines(code)
+    matcher = difflib.SequenceMatcher(a=[_line_key(line) for line in old], b=[_line_key(line) for line in new],
+                                      autojunk=False)
+    kept = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for i in range(i1, i2):
+                kept += [""] * old_gaps[i] + [old[i]]
+        elif tag in ("replace", "insert"):
+            for j in range(j1, j2):
+                # A replacement keeps the spacing before the code it replaces.
+                gap = old_gaps[i1] if tag == "replace" and j == j1 else new_gaps[j]
+                kept += [""] * gap + [new[j]]
+        # "delete": the lines go, with the blank lines before them.
+    kept += [""] * old_tail
+    return "\n".join(kept) + ("\n" if code.endswith("\n") else "")
+
+
+def _split_blank_lines(text: str):
+    """(non-blank lines, blank lines before each, trailing blank lines)."""
+    lines, gaps, gap = [], [], 0
+    for line in text.splitlines():
+        if line.strip():
+            lines.append(line)
+            gaps.append(gap)
+            gap = 0
+        else:
+            gap += 1
+    return lines, gaps, gap
+
+
+def _line_key(line: str) -> str:
+    indent = len(line) - len(line.lstrip())
+    return f"{indent}:{re.sub(r'\s+', '', line)}"
 
 
 def _code_cells(notebook: dict) -> dict[int, str]:
