@@ -81,6 +81,27 @@ Points at a local Ollama instance by default; override with the
 `NBCORE_LLM_API_KEY` for a hosted OpenAI-compatible endpoint (see
 nbcore's `llm/config.py`).
 
+### Fixing data leaks (optional, `nbfix[llm]`)
+
+```bash
+nbfix -f tests/resources/dataleak_script_flat_true.py --fix
+nbfix -f tests/resources/dataleak_script_flat_true.py --fix --diff | git apply
+```
+
+`--fix` asks the LLM for a change that removes every data leak, then
+re-runs the analysis on the patched code. The repair is `verified` only
+if no leaks remain, it adds no new analysis warnings, and every call a
+leak was reported at (`predict`, `score`, ...) is still there. A rejected
+attempt is retried with the reasons as feedback (`--attempts`, default 3).
+
+The file is never written. `--fix` prints JSON with a `status`
+(`verified`, `unverified`, `failed` or `no_findings`), the proposed
+`edits` (whole replacement cells), a unified `diff` and the LLM's
+`explanation`; an `unverified` result also lists the `problems` and
+`remaining_findings`. `--fix --diff` prints only the diff of a verified
+repair - for a script, a diff of the file that `git apply` accepts; for a
+notebook, one diff per edited cell to read, not apply.
+
 ### Scripts
 
 A `.py` script with `# %%` (VS Code / Jupytext) or `# In[ ]:` (Jupyter

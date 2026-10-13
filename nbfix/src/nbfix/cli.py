@@ -163,6 +163,19 @@ def detect_stale_cells(filename, notebook, cell_index):
     return result.dumps(True)
 
 
+def fix_leaks(filename, notebook, max_attempts=3):
+    """LLM-suggested data-leak repair, verified by re-running the analysis
+    (see repair.fix). Never writes the file - the result carries the
+    proposed edits and a unified diff."""
+    from .repair import fix  # repair builds on this module's run_batch
+
+    source = None
+    if filename and filename.endswith(".py"):
+        with open(filename, encoding="utf-8") as f:
+            source = f.read()
+    return fix(read_input(filename, notebook), max_attempts=max_attempts, source=source, filename=filename)
+
+
 def _build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="NBFix - live and batch notebook diagnostics")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -200,6 +213,21 @@ def _build_parser() -> ArgumentParser:
              '"Stale Cells Analysis" (-a). Requires the llm extra (pip install '
              'nbfix[llm]). Requires --cell.',
     )
+    parser.add_argument(
+        "--fix", action="store_true",
+        help='Suggest an LLM repair for every data leak, verified by re-running the '
+             'analysis on the patched code. Prints the result as JSON; never writes '
+             'the file. Requires the llm extra (pip install nbfix[llm]).',
+    )
+    parser.add_argument(
+        "--attempts", type=int, default=3,
+        help='Maximum LLM attempts for --fix (default 3).',
+    )
+    parser.add_argument(
+        "--diff", action="store_true",
+        help='With --fix, print only the unified diff of a verified repair (for '
+             'git apply); exits with an error if no repair was verified.',
+    )
     return parser
 
 
@@ -218,6 +246,22 @@ def main():
         except RuntimeError as exc:
             raise SystemExit(f"Error: {exc}")
         print(results)
+        return
+
+    if args.fix:
+        if args.attempts < 1:
+            parser.error("--attempts must be at least 1")
+        try:
+            result = fix_leaks(args.filename, args.notebook, args.attempts)
+        except (RuntimeError, ValueError) as exc:
+            raise SystemExit(f"Error: {exc}")
+        if not args.diff:
+            print(json.dumps(result, indent=2))
+        elif result["status"] == "verified":
+            print(result["diff"], end="")
+        else:
+            problems = "".join(f"\n  - {p}" for p in result.get("problems", []))
+            raise SystemExit(f"No verified repair (status: {result['status']}).{problems}")
         return
 
     if args.detect_stale_cells:
