@@ -480,7 +480,12 @@ class DataLeakAnalysis(Analysis):
         return (pre <= current)
 
     def update_abstract_state(self, cell_IR, notebook_IR):
-        self.abstract_state, _ = Runner(self.stats, defaultdict(DataLeakAbstractState), notebook_IR).intra_fixpoint_runner(cell_IR, self, self.abstract_state)
+        # The cell ran to completion, leak or not: stopping at the leak would
+        # leave the kernel state half-updated (a call's result never moved
+        # onto its variable), and that stale state then reports leaks against
+        # later, fixed code.
+        self.abstract_state, _ = Runner(self.stats, defaultdict(DataLeakAbstractState), notebook_IR).intra_fixpoint_runner(
+            cell_IR, self, self.abstract_state, stop_at_terminal=False)
 
     def combine_states(self, states: list[DataLeakAbstractState]):
         if len(states) == 1:

@@ -119,10 +119,20 @@ class DataLeakAbstractState(AbstractState):
         return self.state[key]
 
     def condition(self, cell_IR: IntermediateRepresentations, node: Node, errors: list[ErrorInfo]) -> list:        
+        # Only the node whose own result completes a train/test pair reports
+        # it. A pair already in the state - e.g. a model trained on all the
+        # data and its test predictions, both from an earlier run in a live
+        # session - is not this node's doing, and would otherwise be reported
+        # at every later node, entry/exit nodes included.
+        own = self.state.get(node.left_hand_side) if isinstance(node, AssignmentNode) else None
+        if own is None:
+            return errors
         test_domain: list[DataLeakAbstractDomain] = [e for e in self.state.values() if Usage.TEST in e.usages]
         train_domain: list[DataLeakAbstractDomain] = [e for e in self.state.values() if Usage.TRAIN in e.usages]
 
         for test_dfs, train_dfs in product(test_domain, train_domain):
+            if own is not test_dfs and own is not train_dfs:
+                continue
             if test_dfs.dfs.cartesian_overlap(train_dfs.dfs):
                 label, call, func = self._sink_of(node, cell_IR)
                 if label is not None:

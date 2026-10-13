@@ -7,7 +7,7 @@ from nbcore.analyses.abs_domains.dataleak_lattice.data_frame_sets import DataFra
 from nbcore.analyses.abs_domains.dataleak_lattice.data_frame import DataFrame
 from nbcore.analyses.abs_domains.dataleak_lattice.columns import Columns
 from nbcore.analyses.abs_domains.dataleak_lattice.rows import Rows
-from nbcore.parser.cfg_nodes import Node
+from nbcore.parser.cfg_nodes import BBorBInode, Node
 from nbcore.analyses.runner.analysis_results import ErrorInfo, ErrorType
 
 class TestDataFrames(unittest.TestCase):
@@ -210,6 +210,13 @@ class TestDataFrames(unittest.TestCase):
 
         self.assertEqual(dfs1 | dfs2, ref_dfs)
 
+    @staticmethod
+    def _call_node(code, cell_id):
+        """(cell IR, its call node): the node condition() reports at, whose
+        result is the state entry named after the call (e.g. `lr.predict`)."""
+        cell_IR = IntermediateRepresentations(code, cell_id)
+        return cell_IR, next(n for n in cell_IR.CFG.nodes if isinstance(n, BBorBInode))
+
     def test_condition_detection(self):
 
         dfs1: DataFrameSet = DataFrameSet({
@@ -221,35 +228,45 @@ class TestDataFrames(unittest.TestCase):
         })        
 
         a_state: DataLeakAbstractState = DataLeakAbstractState()
+        cell_IR, predict = self._call_node("lr.predict(X_test)", 1)
 
         origin = {"cell": 0, "line": 3, "call": "scaler.fit_transform", "variable": "x_selected"}
         a_state.state['X_train'] = DataLeakAbstractDomain(dfs1, True, {Usage.TRAIN})
-        a_state.state['X_test'] = DataLeakAbstractDomain(dfs2, True, {Usage.TEST}, taint_origin=origin)
+        a_state.state['lr.predict'] = DataLeakAbstractDomain(dfs2, True, {Usage.TEST}, taint_origin=origin)
         errors = []
-        a_state.condition(IntermediateRepresentations("", 1), Node("", None, line_number=1, path=1), errors)
-        self.assertEqual(errors, [ErrorInfo(1, 1, "", ErrorType.TERMINAL,
-            "Preprocessing leak: `` passed to `` is contaminated because `scaler.fit_transform` (cell 0, line 3) "
+        a_state.condition(cell_IR, predict, errors)
+        self.assertEqual(errors, [ErrorInfo(1, 1, "X_test", ErrorType.TERMINAL,
+            "Preprocessing leak: `X_test` passed to `lr.predict` is contaminated because `scaler.fit_transform` (cell 0, line 3) "
             "ran on unsplit `x_selected` before the train/test split, so test-set statistics leak into the model.",
             source=origin)])
 
-        a_state.state['X_test'] = DataLeakAbstractDomain(dfs2, False, {Usage.TEST})
+        a_state.state['lr.predict'] = DataLeakAbstractDomain(dfs2, False, {Usage.TEST})
         errors = []
-        a_state.condition(IntermediateRepresentations("", 1), Node("", None, line_number=1, path=1), errors)
+        a_state.condition(cell_IR, predict, errors)
         self.assertEqual(errors, [])
 
         dfs2.frames['x_selected'][0].rows = Rows(2, 4)
 
         a_state.state['X_train'] = DataLeakAbstractDomain(dfs1, False, {Usage.TRAIN})
-        a_state.state['X_test'] = DataLeakAbstractDomain(dfs2, True, {Usage.TEST})
+        a_state.state['lr.predict'] = DataLeakAbstractDomain(dfs2, True, {Usage.TEST})
 
         errors = []
-        a_state.condition(IntermediateRepresentations("", 1), Node("", None, line_number=1, path=1), errors)
-        self.assertEqual(errors, [ErrorInfo(1, 1, "", ErrorType.TERMINAL,
-            "Train/test overlap: `` passed to `` shares rows with the model's training data, so evaluation scores are inflated.")])
+        a_state.condition(cell_IR, predict, errors)
+        self.assertEqual(errors, [ErrorInfo(1, 1, "X_test", ErrorType.TERMINAL,
+            "Train/test overlap: `X_test` passed to `lr.predict` shares rows with the model's training data, so evaluation scores are inflated.")])
+
+        # The same overlapping pair, at a node that is not part of it, is not reported there.
+        other_IR, split = self._call_node("train_test_split(X, y)", 1)
+        errors = []
+        a_state.condition(other_IR, split, errors)
+        self.assertEqual(errors, [])
+        errors = []
+        a_state.condition(IntermediateRepresentations("", 1), Node("Exit module", None, line_number=1, path=1), errors)
+        self.assertEqual(errors, [])
 
         dfs1.frames['x_selected'][0].source = 'x_selected2'
         errors = []
-        a_state.condition(IntermediateRepresentations("", 1), Node("", None, line_number=1, path=1), errors)
+        a_state.condition(cell_IR, predict, errors)
         self.assertEqual(errors, [])
 
     def test_overlap_source_is_counterpart_usage_site(self):
@@ -259,17 +276,17 @@ class TestDataFrames(unittest.TestCase):
         predict_site = {"cell": 3, "line": 1, "call": "lr.predict", "variable": "X_test"}
 
         a_state = DataLeakAbstractState()
-        a_state.state['fit'] = DataLeakAbstractDomain(dfs_train, False, {Usage.TRAIN}, usage_sites={Usage.TRAIN: fit_site})
-        a_state.state['pred'] = DataLeakAbstractDomain(dfs_test, False, {Usage.TEST}, usage_sites={Usage.TEST: predict_site})
+        a_state.state['lr.fit'] = DataLeakAbstractDomain(dfs_train, False, {Usage.TRAIN}, usage_sites={Usage.TRAIN: fit_site})
+        a_state.state['lr.predict'] = DataLeakAbstractDomain(dfs_test, False, {Usage.TEST}, usage_sites={Usage.TEST: predict_site})
 
         # Firing at predict() points back at fit() ...
         errors = []
-        a_state.condition(IntermediateRepresentations("", 3), Node("", None, line_number=1, path=1), errors)
+        a_state.condition(*self._call_node("lr.predict(X_test)", 3), errors)
         self.assertEqual(errors[0].source, fit_site)
 
         # ... and firing at fit() (predict ran first) points at predict().
         errors = []
-        a_state.condition(IntermediateRepresentations("", 2), Node("", None, line_number=3, path=1), errors)
+        a_state.condition(*self._call_node("a = 1\nb = 2\nlr.fit(X, y)", 2), errors)
         self.assertEqual(errors[0].source, predict_site)
 
     def test_non_dull_domains_with_different_taint_are_not_equal(self):

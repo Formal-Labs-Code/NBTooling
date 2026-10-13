@@ -85,7 +85,7 @@ class Result:
                 # interpolation here previously produced invalid JSON for
                 # any message containing a `"`.
                 error_json += (
-                    f'{{"line":{err.line},"label":{json.dumps(err.label)}, '
+                    f'{{"line":{json.dumps(err.line)},"label":{json.dumps(err.label)}, '
                     f'"error_type":{json.dumps(str(errty))}, "message":{json.dumps(err.error_message)}'
                 )
                 if err.source is not None:

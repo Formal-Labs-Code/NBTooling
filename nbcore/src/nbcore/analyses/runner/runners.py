@@ -18,7 +18,12 @@ class Runner:
         self.error_states: list[AbstractState] = list()
         self.cells_summary_map: dict[int, IntermediateRepresentations] = cells_summary_map
     
-    def intra_fixpoint_runner(self, cell_IR: IntermediateRepresentations, analysis: Analysis, as_init: AbstractState, K = None, imports = None):
+    def intra_fixpoint_runner(self, cell_IR: IntermediateRepresentations, analysis: Analysis, as_init: AbstractState, K = None, imports = None, stop_at_terminal = True):
+        """The cell's post-state and the errors found in it. By default it stops
+        at the first terminal error - exploring a path past an error adds
+        nothing. stop_at_terminal=False runs the whole cell, for a cell that
+        has actually run: the kernel executed all of it, so its state must
+        reflect all of it."""
         cfg: CFG = cell_IR.CFG
         node_state_map = defaultdict(type(as_init))
         transform_order: FifoQueue = FifoQueue()
@@ -48,9 +53,8 @@ class Runner:
                     transform_order.push(node)
                 node_state_map[next_node] = as_transformed
             
-            for err in errors:
-                if err.error_type == ErrorType.TERMINAL:
-                    return as_transformed, errors
+            if stop_at_terminal and any(err.error_type == ErrorType.TERMINAL for err in errors):
+                return as_transformed, errors
 
         cell_post_state = node_state_map[cfg.nodes[-1]]
         return cell_post_state, errors
