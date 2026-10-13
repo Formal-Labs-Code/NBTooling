@@ -77,8 +77,9 @@ nbfix -f tests/resources/Basic.ipynb --detect-stale-cells --cell 0
 ```
 
 Points at a local Ollama instance by default; override with the
-`NBCORE_LLM_BASE_URL`/`NBCORE_LLM_MODEL` env vars (see nbcore's
-`llm/config.py`).
+`NBCORE_LLM_BASE_URL`/`NBCORE_LLM_MODEL` env vars, plus
+`NBCORE_LLM_API_KEY` for a hosted OpenAI-compatible endpoint (see
+nbcore's `llm/config.py`).
 
 ### Scripts
 

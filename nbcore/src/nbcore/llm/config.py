@@ -9,14 +9,22 @@ DEFAULT_MODEL = "qwen2.5-coder:14b"
 def default_client() -> LLMClient:
     """
     Builds an LLMClient from NBCORE_LLM_BASE_URL/NBCORE_LLM_MODEL env
-    vars, defaulting to a local Ollama instance. One shared prefix, not
+    vars, defaulting to a local Ollama instance. NBCORE_LLM_API_KEY is
+    only needed for a hosted endpoint - a local Ollama ignores the key,
+    so it stays optional (LLMClient's own placeholder when unset). One
+    shared prefix, not
     one per tool: this function is nbcore-owned and used identically by
     every LLM feature (see detect_bugs_event.py,
     detect_stale_cells_event.py, detect_api_sequence_event.py) - a
     per-tool prefix would need this function parameterized per caller,
     which nothing currently needs.
     """
+    kwargs = {}
+    api_key = os.environ.get("NBCORE_LLM_API_KEY")
+    if api_key:
+        kwargs["api_key"] = api_key
     return LLMClient(
         base_url=os.environ.get("NBCORE_LLM_BASE_URL", DEFAULT_BASE_URL),
         model=os.environ.get("NBCORE_LLM_MODEL", DEFAULT_MODEL),
+        **kwargs,
     )
