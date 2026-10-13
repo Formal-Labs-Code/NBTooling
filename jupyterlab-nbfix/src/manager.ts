@@ -3,7 +3,7 @@ import { Cell, ICellModel } from '@jupyterlab/cells';
 import { IObservableList } from '@jupyterlab/observables';
 import { NotebookActions, NotebookPanel } from '@jupyterlab/notebook';
 
-import { INBFixDiagnostic, postEvent } from './handler';
+import { INBFixCell, INBFixDiagnostic, INBFixFixResult, postEvent, requestFix } from './handler';
 import { diagnosticsStore, getEditorView, toCodeMirrorDiagnostics } from './linter';
 
 const CHANGE_DEBOUNCE_MS = 500;
@@ -69,6 +69,12 @@ function mergeDiagnostics(
   }));
 }
 
+/** A repair suggestion, with the cells it was computed from. */
+export interface IFixProposal {
+  result: INBFixFixResult;
+  cells: INBFixCell[];
+}
+
 function countFindings(diagnostics?: INBFixDiagnostic[]): number {
   return (diagnostics ?? []).reduce((sum, cellDiagnostic) => sum + cellDiagnostic.errors.length, 0);
 }
@@ -110,6 +116,13 @@ export class NotebookSessionManager {
   // fact doesn't work). Keyed by cell model id (stable across
   // reordering), not position.
   private _lastConfirmedCode = new Map<string, string>();
+
+  /**
+   * Called when the user clicks "Suggest fix" on a data-leak diagnostic -
+   * set by index.ts, which owns the dialog flow (the same one the
+   * "Suggest Fix" command runs).
+   */
+  onSuggestFix?: () => void;
 
   constructor(panel: NotebookPanel) {
     this._panel = panel;
@@ -259,7 +272,55 @@ export class NotebookSessionManager {
     return countFindings(response.diagnostics);
   }
 
-  private _cellsAsJSON(): Array<{ cell_type: string; source: string }> {
+  /**
+   * Asks the server for an LLM repair of every data leak, verified by
+   * NBFix. Sends the cells as they are right now rather than relying on
+   * the server-side session, and keeps them with the result so applyFix
+   * can tell whether the notebook changed in the meantime.
+   */
+  async suggestFix(): Promise<IFixProposal> {
+    const cells = this._cellsAsJSON();
+    const result = await requestFix(cells, this._notebookId);
+    return { result, cells };
+  }
+
+  /**
+   * Writes a proposal's edits into the notebook - unless any cell changed
+   * since it was requested, since the edits (and their verification) were
+   * computed against those exact cells; returns false then. Each edit is
+   * an ordinary source change, and can be undone in the cell.
+   *
+   * Then reopens the server-side session on the patched cells, the same as
+   * a page reload does: the live data-leak analysis carries state from
+   * earlier runs that re-running edited cells doesn't clear (the leak would
+   * still be reported against the fixed code), so the fix's cells start
+   * from a clean analysis and report again as they are re-run.
+   */
+  async applyFix(proposal: IFixProposal): Promise<boolean> {
+    const current = this._cellsAsJSON();
+    const unchanged =
+      current.length === proposal.cells.length &&
+      current.every(
+        (cell, i) =>
+          cell.cell_type === proposal.cells[i].cell_type && cell.source === proposal.cells[i].source
+      );
+    if (!unchanged) {
+      return false;
+    }
+    for (const edit of proposal.result.edits ?? []) {
+      this._panel.content.widgets[edit.cell]?.model.sharedModel.setSource(edit.code);
+    }
+    this._llmDiagnostics = [];
+    this._llmStaleDiagnostics = [];
+    this._llmApiSequenceDiagnostics = [];
+    const response = await postEvent('open_notebook', this._notebookId, {
+      notebook_json: this._cellsAsJSON()
+    });
+    this._setDeterministicDiagnostics(response.diagnostics);
+    return true;
+  }
+
+  private _cellsAsJSON(): INBFixCell[] {
     return this._panel.content.widgets.map(cellWidget => ({
       cell_type: cellWidget.model.type,
       source: cellWidget.model.sharedModel.getSource()
@@ -555,7 +616,7 @@ export class NotebookSessionManager {
       const cellWidget = this._panel.content.widgets[cellDiagnostic.cell_id];
       const view = cellWidget && getEditorView(cellWidget.editor);
       if (view) {
-        diagnosticsStore.set(view, toCodeMirrorDiagnostics(view, cellDiagnostic));
+        diagnosticsStore.set(view, toCodeMirrorDiagnostics(view, cellDiagnostic, this.onSuggestFix));
       }
     }
   }

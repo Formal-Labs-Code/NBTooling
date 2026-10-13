@@ -4,6 +4,7 @@ import { IEditorExtensionRegistry } from '@jupyterlab/codemirror';
 import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
 
 import { AnalysesDialogBody } from './analysesDialog';
+import { suggestFix } from './fixDialog';
 import { ANALYSIS_OPTIONS, NotebookSessionManager } from './manager';
 import { registerNBFixLinter } from './linter';
 
@@ -11,6 +12,7 @@ namespace CommandIDs {
   export const checkCell = 'nbfix:check-cell-for-bugs';
   export const checkNotebook = 'nbfix:check-notebook-for-bugs';
   export const chooseActiveAnalyses = 'nbfix:choose-active-analyses';
+  export const suggestFix = 'nbfix:suggest-fix';
 }
 
 /**
@@ -33,6 +35,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
     tracker.widgetAdded.connect((_sender, panel) => {
       const manager = new NotebookSessionManager(panel);
+      manager.onSuggestFix = () => void suggestFix(manager);
       managers.set(panel, manager);
       void manager.start().catch(error => {
         console.error('nbfix: failed to start notebook session', error);
@@ -109,9 +112,23 @@ const plugin: JupyterFrontEndPlugin<void> = {
       }
     });
 
+    commands.addCommand(CommandIDs.suggestFix, {
+      label: 'NBFix: Suggest Fix for Data Leaks',
+      iconClass: 'jp-nbfix-icon',
+      isEnabled: () => !!tracker.currentWidget,
+      execute: () => {
+        const panel = tracker.currentWidget;
+        const manager = panel && managers.get(panel);
+        if (manager) {
+          return suggestFix(manager);
+        }
+      }
+    });
+
     palette.addItem({ command: CommandIDs.checkNotebook, category: 'NBFix' });
     palette.addItem({ command: CommandIDs.checkCell, category: 'NBFix' });
     palette.addItem({ command: CommandIDs.chooseActiveAnalyses, category: 'NBFix' });
+    palette.addItem({ command: CommandIDs.suggestFix, category: 'NBFix' });
   }
 };
 

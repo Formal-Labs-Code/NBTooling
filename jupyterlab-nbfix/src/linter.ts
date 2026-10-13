@@ -47,14 +47,26 @@ class DiagnosticsStore {
 
 export const diagnosticsStore = new DiagnosticsStore();
 
+// The two kinds of message the data-leak analysis emits (see nbcore's
+// dataleak_abs_state.py) - its findings share error_type with other
+// analyses, so the message is what identifies them.
+const DATA_LEAK_MESSAGE = /^(Preprocessing leak|Train\/test overlap):/;
+
+export function isDataLeak(message: string): boolean {
+  return DATA_LEAK_MESSAGE.test(message);
+}
+
 /**
  * Converts one cell's NBFix error list into CodeMirror Diagnostic ranges,
  * locating the label text on its reported line when present (mirrors the
  * VS Code prototype's diagnostic-range logic in server_handler.ts).
+ * Data-leak diagnostics get a "Suggest fix" button in their tooltip when
+ * onSuggestFix is given.
  */
 export function toCodeMirrorDiagnostics(
   view: EditorView,
-  cellDiagnostic: INBFixDiagnostic
+  cellDiagnostic: INBFixDiagnostic,
+  onSuggestFix?: () => void
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   const lineCount = view.state.doc.lines;
@@ -91,7 +103,10 @@ export function toCodeMirrorDiagnostics(
       severity,
       message: error.message,
       source: 'nbfix',
-      ...(isLLMFinding ? { markClass: 'cm-nbfix-llm-finding' } : {})
+      ...(isLLMFinding ? { markClass: 'cm-nbfix-llm-finding' } : {}),
+      ...(onSuggestFix && isDataLeak(error.message)
+        ? { actions: [{ name: 'Suggest fix', apply: () => onSuggestFix() }] }
+        : {})
     });
   }
 

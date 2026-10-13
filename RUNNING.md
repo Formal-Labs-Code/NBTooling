@@ -170,6 +170,22 @@ Open any notebook. The extension opens a session for it automatically
 and edit/add/remove them; no further setup or commands are needed once
 JupyterLab is running.
 
+### Suggesting a fix for a data leak
+
+Hover a data-leak warning and click **Suggest fix** in its tooltip, or run
+**NBFix: Suggest Fix for Data Leaks** from the command palette. NBFix asks
+the LLM (see "Fixing data leaks" above; it needs `nbfix[llm]` installed
+next to the server extension) for a repair of every data leak in the
+notebook as it is now, verifies it, and shows a dialog with the
+verification status, the LLM's explanation and the diff. This can take a
+minute with a local model.
+
+Nothing changes until you click **Apply** (**Apply anyway** for a fix NBFix
+could not verify). Apply is refused if the notebook changed while the fix
+was being prepared. After applying, re-run the notebook from the first
+edited cell: data-leak warnings reflect what has run. Each edited cell can
+be undone with Ctrl+Z.
+
 ### Rebuilding after frontend changes
 
 If you edit `jupyterlab-nbfix/src/*.ts`, rebuild with:

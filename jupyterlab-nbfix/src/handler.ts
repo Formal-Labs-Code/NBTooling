@@ -77,3 +77,37 @@ export function postEvent(
     })
   });
 }
+
+export interface INBFixCell {
+  cell_type: string;
+  source: string;
+}
+
+/**
+ * Result of nbfix.repair.fix - see its docstring. `edits` cells are
+ * positions in the cell list that was sent, i.e. notebook widget indices.
+ */
+export interface INBFixFixResult {
+  status: 'verified' | 'unverified' | 'failed' | 'no_findings';
+  attempts: number;
+  findings: Array<{ message: string }>;
+  edits?: Array<{ cell: number; code: string }>;
+  diff?: string;
+  explanation?: string;
+  problems?: string[];
+}
+
+/**
+ * Asks the server for an LLM repair of every data leak in these cells,
+ * verified by NBFix (POST /nbfix/api/fix). Can take tens of seconds.
+ */
+export async function requestFix(
+  cells: INBFixCell[],
+  path: string
+): Promise<INBFixFixResult> {
+  const response = await requestAPI<{ fix: INBFixFixResult }>('fix', {
+    method: 'POST',
+    body: JSON.stringify({ cells, path })
+  });
+  return response.fix;
+}

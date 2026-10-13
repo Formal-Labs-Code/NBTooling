@@ -1,6 +1,9 @@
+import functools
 import json
+import os
 
 import tornado
+from tornado.ioloop import IOLoop
 from jupyter_server.base.handlers import APIHandler
 from jupyter_server.utils import url_path_join
 
@@ -15,7 +18,13 @@ from .sessions import SessionStore
 DEFAULT_ANALYSES = [DATA_LEAK, STALE, IDLE, ISOLATED]
 
 
-class EventHandler(APIHandler):
+class _NBFixHandler(APIHandler):
+    def _respond_error(self, status_code, message):
+        self.set_status(status_code)
+        self.finish(json.dumps({"status": "error", "message": message}))
+
+
+class EventHandler(_NBFixHandler):
     """
     Single endpoint that receives {event, notebook_id, params} and dispatches
     it to the matching Event on the AnalysisSession for that notebook.
@@ -94,14 +103,53 @@ class EventHandler(APIHandler):
             response["checked_cells"] = sorted(checked_cells)
         self.finish(json.dumps(response))
 
-    def _respond_error(self, status_code, message):
-        self.set_status(status_code)
-        self.finish(json.dumps({"status": "error", "message": message}))
+
+class FixHandler(_NBFixHandler):
+    """
+    Suggests a repair for every data leak in the notebook sent with the
+    request - {"cells": [{"cell_type", "source"}], "path"?} - and responds
+    {"status": "success", "fix": <nbfix.repair.fix result>}.
+
+    Not an EventHandler event: it neither reads nor changes the notebook's
+    session (the frontend sends the cells as they are now, so the repair is
+    never based on stale server-side state), and an LLM repair takes tens of
+    seconds, so it runs in a worker thread rather than blocking the server.
+    """
+
+    @tornado.web.authenticated
+    async def post(self):
+        body = self.get_json_body() or {}
+        cells = body.get("cells")
+        if not isinstance(cells, list) or not all(
+            isinstance(cell, dict) and isinstance(cell.get("cell_type"), str) and isinstance(cell.get("source"), str)
+            for cell in cells
+        ):
+            self._respond_error(400, 'cells must be a list of {"cell_type", "source"}')
+            return
+
+        from ..repair import fix
+
+        notebook = {"cells": [
+            {"cell_type": cell["cell_type"], "source": cell["source"], "metadata": {}} for cell in cells
+        ]}
+        name = os.path.basename(body.get("path") or "") or None
+        try:
+            result = await IOLoop.current().run_in_executor(
+                None, functools.partial(fix, notebook, filename=name)
+            )
+        except Exception as exc:
+            # An unreachable/missing LLM, or the analysis failing on this
+            # notebook - either way, a clean error rather than a crash.
+            self._respond_error(500, f"Fix failed: {exc}")
+            return
+        self.finish(json.dumps({"status": "success", "fix": result}))
 
 
 def setup_handlers(web_app):
     host_pattern = ".*$"
     base_url = web_app.settings["base_url"]
     web_app.settings.setdefault("nbfix_sessions", SessionStore())
-    route_pattern = url_path_join(base_url, "nbfix", "api", "event")
-    web_app.add_handlers(host_pattern, [(route_pattern, EventHandler)])
+    web_app.add_handlers(host_pattern, [
+        (url_path_join(base_url, "nbfix", "api", "event"), EventHandler),
+        (url_path_join(base_url, "nbfix", "api", "fix"), FixHandler),
+    ])
