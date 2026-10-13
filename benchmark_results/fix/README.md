@@ -65,6 +65,26 @@ Traced attempt by attempt for the 12 fixtures where attempt 1 was rejected:
 reported, without following the data back to the split that creates the
 training set or forward to the cells using the changed variable.
 
+## Run 9: data-flow hints (16 fixtures)
+
+Each preprocessing leak now says which later cells use what the step produces
+and whether the split runs after it (e.g. "`X_filled` (made in cell 1) is used
+in cell 2. The split is in cell 2, so it runs after cell 1: ..."), aimed at the
+cross-cell blind spot above. Six fixtures get a hint.
+
+| Model | Verified | Correct | Verified but wrong | Attempts | Time |
+| --- | --- | --- | --- | --- | --- |
+| qwen2.5-coder:14b | 16 (was 16) | 15 (was 15) | 1 (was 1) | 21 (was 21) | 431 s (was 438 s) |
+| qwen2.5-coder:7b | 10 (was 10) | 8 (was 9) | 2 (was 1) | 29 (was 31) | 271 s (was 305 s) |
+
+No measurable improvement. 14b gets imputer right on the first attempt (was 2)
+but still needs 2 for smote. 7b keeps making the same cross-cell mistakes on the
+hinted fixtures (reads `X_train` before the split, uses removed names); it
+gained dataleak_true and lost imputer, and its new two-leak-script fix drops the
+imputation for the second model - verified, but it changes what the code
+computes. All differences are a fixture or two, within the noise of a single
+run per fixture.
+
 ## Run history
 
 | Run | Fixtures | Change | 14b verified (wrong) |
@@ -77,6 +97,7 @@ training set or forward to the cells using the changed variable.
 | 6 | 16 | Check: features and labels from the same split. Feedback names the cell that defines a name read too early | 15 (0); 7b: 11 (2) |
 | 7 | 16 | Check: names read inside functions; quote style ignored as formatting | 15 (0); 7b: 10 (1) |
 | 8 | 16 | Restructured prompt; leaks name their split; retries flag repeated fixes | 16 (1); 7b: 10 (1) |
+| 9 | 16 | Data-flow hints for preprocessing leaks | 16 (1); 7b: 10 (2) |
 
 Verified but wrong along the way (none is a data leak, so re-analysis alone
 can't see them; each led to the check or prompt change in the next run):
