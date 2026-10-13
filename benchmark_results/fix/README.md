@@ -30,6 +30,41 @@ is actually a correct fix was judged by reading every diff.
   cell), about half that with 7b. NBFix's own analysis and checks take
   milliseconds.
 
+## Run 8: restructured prompt (16 fixtures)
+
+The prompt was rewritten after tracing 14b's failures on the two-leak notebook
+(it fitted model 2's scaler on model 1's split, then resubmitted the same
+rejected fix twice): sections, correctness rules before "change as little as
+possible", restructuring cells stated as expected, each leak names the split
+that produces the evaluated data, and retries are numbered, say the analysis is
+exact, and flag a repeated fix.
+
+| Model | Verified | Correct | Verified but wrong | Attempts | Time |
+| --- | --- | --- | --- | --- | --- |
+| qwen2.5-coder:14b | 16 (was 15) | 15 (was 15) | 1 (was 0) | 21 (was 24) | 438 s (was 456 s) |
+| qwen2.5-coder:7b | 10 (was 10) | 9 (was 9) | 1 (was 1) | 31 (was 28) | 305 s (was 236 s) |
+
+14b now fixes the two-leak notebook on its first attempt; its one wrong fix
+(two-leak script) unpacks a `train_test_split` into 2 names instead of 4, which
+no check covers yet. 7b gained imputer (over-restructured, but correct) and the
+two-leak script, and lost script_cells and the two-leak notebook.
+
+### Why first attempts fail (run 8)
+
+Traced attempt by attempt for the 12 fixtures where attempt 1 was rejected:
+
+| What the model got wrong | 14b | 7b |
+| --- | --- | --- |
+| Fixed the leak in a cell that runs before the split (`X_train` isn't defined yet) | imputer, smote | readexcel, rebind, smote |
+| Left later cells using names it removed (`X_filled`, `X_scaled`, `X_selected`, `b_train`) | | imputer, script_cells, dataleak_true, two_leaks.py |
+| Fixed the preprocessing, but a helper refits on test data | helpers | |
+| Re-split the already-split training data, still leaking | | two_leaks.ipynb |
+| Fixed the one leak reported; the second surfaced after (analysis limitation) | two_leaks.py | |
+
+9 of 12 are the same blind spot: the fix is a local edit where the leak is
+reported, without following the data back to the split that creates the
+training set or forward to the cells using the changed variable.
+
 ## Run history
 
 | Run | Fixtures | Change | 14b verified (wrong) |
@@ -41,6 +76,7 @@ is actually a correct fix was judged by reading every diff.
 | 5 | 16 | Added imputer, feature-selection and two-leak fixtures. Formatting-only changes undone; check: nothing fitted on test data | 13 (1) |
 | 6 | 16 | Check: features and labels from the same split. Feedback names the cell that defines a name read too early | 15 (0); 7b: 11 (2) |
 | 7 | 16 | Check: names read inside functions; quote style ignored as formatting | 15 (0); 7b: 10 (1) |
+| 8 | 16 | Restructured prompt; leaks name their split; retries flag repeated fixes | 16 (1); 7b: 10 (1) |
 
 Verified but wrong along the way (none is a data leak, so re-analysis alone
 can't see them; each led to the check or prompt change in the next run):
