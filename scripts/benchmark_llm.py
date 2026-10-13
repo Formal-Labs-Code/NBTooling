@@ -41,18 +41,22 @@ import os
 import time
 from dataclasses import dataclass
 
-from nbfix.analyses.dependency_analysis import build_fixpoint_dependency_edges
-from nbfix.analyses.type_shape_analysis import (
+from nbcore.analyses.dataleak_analysis import DATA_LEAK
+from nbcore.analyses.dependency_analysis import build_fixpoint_dependency_edges
+from nbcore.analyses.type_shape_analysis import (
     build_pruned_dependency_edges,
     detect_type_changes,
     label_stable_dependencies,
 )
-from nbfix.analyzer import NBFix
-from nbfix.constants import DATA_LEAK, IDLE, ISOLATED, STALE
-from nbfix.llm.client import LLMClient, LLMClientError
-from nbfix.llm.detect_bugs_event import DetectBugsEvent
-from nbfix.llm.notebook_loading import load_notebook_resilient
-from nbfix.resource_utils.utils import read_json
+from nbcore.llm.client import LLMClient, LLMClientError
+from nbcore.llm.detect_bugs_event import DetectBugsEvent
+from nbcore.llm.notebook_loading import load_notebook_resilient
+from nbcore.resource_utils.utils import load_notebook, read_json
+from nbcore.session import AnalysisSession
+from nbfix.analyses.idle_cell_analysis import IDLE
+from nbfix.analyses.isolated_cell_analysis import ISOLATED
+from nbfix.analyses.stale_cell_analysis import STALE
+from nbfix.session_factory import new_session
 
 # Named presets rather than a raw context_mode x finding_types cross-product
 # - the benchmark's job is a small number of clean comparisons, not
@@ -213,9 +217,9 @@ class RunResult:
     error: str = None
 
 
-def _load_nbfix(notebook_json: dict, level: int = 5) -> NBFix:
+def _load_nbfix(notebook_json: dict, level: int = 5) -> AnalysisSession:
     """
-    Builds a real NBFix and loads the notebook via the real fail-fast core
+    Builds a real NBFix session and loads the notebook via the real fail-fast core
     path first - what production (CLI/server/JupyterLab) actually runs,
     and what llm_bench's fixtures are verified to load through cleanly.
     Falls back to the LLM-only resilient loader (which skips individual
@@ -223,16 +227,16 @@ def _load_nbfix(notebook_json: dict, level: int = 5) -> NBFix:
     needs a construct the parser doesn't support yet - checked per
     fixture, not assumed.
     """
-    nbfix = NBFix(level=level)
+    nbfix = new_session(level=level)
     try:
-        nbfix.load_notebook(notebook_json["cells"])
+        nbfix.load(load_notebook(notebook_json["cells"]))
     except Exception:
-        nbfix.notebook_IR = load_notebook_resilient(notebook_json["cells"])
+        nbfix.cells = load_notebook_resilient(notebook_json["cells"])
     return nbfix
 
 
 def run_once(
-    notebook_name: str, bug_class: str, nbfix: NBFix, config: ModelConfig,
+    notebook_name: str, bug_class: str, nbfix: AnalysisSession, config: ModelConfig,
     context_config_name: str, expected,
 ) -> RunResult:
     context_config = _CONTEXT_CONFIGS[context_config_name]
@@ -248,11 +252,11 @@ def run_once(
     extra_findings = None
     if extra_findings_kind:
         if extra_findings_kind == "type_shape":
-            type_result = detect_type_changes(nbfix.notebook_IR)
+            type_result = detect_type_changes(nbfix.cells)
         elif extra_findings_kind == "stable_labels_terse":
-            type_result = label_stable_dependencies(nbfix.notebook_IR, terse=True)
+            type_result = label_stable_dependencies(nbfix.cells, terse=True)
         else:
-            type_result = label_stable_dependencies(nbfix.notebook_IR)
+            type_result = label_stable_dependencies(nbfix.cells)
         extra_findings = [
             error_info
             for path_result in type_result.path_results
@@ -262,9 +266,9 @@ def run_once(
     dependency_edges_kind = context_config.get("dependency_edges")
     dependency_edges = None
     if dependency_edges_kind == "pruned":
-        dependency_edges = build_pruned_dependency_edges(nbfix.notebook_IR)
+        dependency_edges = build_pruned_dependency_edges(nbfix.cells)
     elif dependency_edges_kind == "fixpoint":
-        dependency_edges = build_fixpoint_dependency_edges(nbfix.notebook_IR)
+        dependency_edges = build_fixpoint_dependency_edges(nbfix.cells)
 
     inner_client = LLMClient(
         base_url=config.base_url,

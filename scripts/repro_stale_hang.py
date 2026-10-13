@@ -16,9 +16,10 @@ import signal
 import sys
 import time
 
-from nbfix.analyzer import NBFix
+from nbcore.analyses.runner.runners import Runner
+from nbcore.resource_utils.utils import load_notebook
 from nbfix.events import RunCellEvent
-from nbfix.analyses.runner.runners import Runner
+from nbfix.session_factory import new_session
 
 
 class Timeout(Exception):
@@ -44,8 +45,8 @@ def main():
     nb = json.load(open("tests/resources/victim.ipynb"))
     cells = [{"cell_type": c["cell_type"], "source": "".join(c["source"])} for c in nb["cells"]]
 
-    nbfix = NBFix(level=5)
-    nbfix.load_notebook(cells)
+    nbfix = new_session(level=5)
+    nbfix.load(load_notebook(cells))
     nbfix.add_analyses(["Stale Cells Analysis"])
 
     signal.signal(signal.SIGALRM, _alarm)

@@ -149,7 +149,7 @@ class TestLoadExpected(unittest.TestCase):
 class TestLoadNBFix(unittest.TestCase):
     def test_loads_via_real_fast_path(self):
         nbfix = _load_nbfix({"cells": [{"cell_type": "code", "source": "x = 1"}]})
-        self.assertEqual(set(nbfix.notebook_IR), {0})
+        self.assertEqual(set(nbfix.cells), {0})
 
     def test_falls_back_to_resilient_loader_on_unsupported_construct(self):
         # A lambda is a real, currently-unsupported construct (see
@@ -162,7 +162,7 @@ class TestLoadNBFix(unittest.TestCase):
                 {"cell_type": "code", "source": "f = lambda y: y + 1"},
             ]
         })
-        self.assertIn(0, nbfix.notebook_IR)
+        self.assertIn(0, nbfix.cells)
 
 
 class TestRunOnce(unittest.TestCase):
