@@ -62,14 +62,7 @@ export async function suggestFix(manager: NotebookSessionManager): Promise<void>
   if (!choice.button.accept) {
     return;
   }
-  let applied: boolean;
-  try {
-    applied = await manager.applyFix(proposal);
-  } catch (error) {
-    Notification.error(`NBFix: the fix was applied, but re-analyzing the notebook failed - ${error}`);
-    return;
-  }
-  if (applied) {
+  if (manager.applyFix(proposal)) {
     // Data-leak diagnostics reflect what has run, so they come back once the
     // edited cells are re-run - running code is left to the user. Cells are
     // numbered from 0, as in NBFix's diagnostics and the diff.

@@ -288,15 +288,10 @@ export class NotebookSessionManager {
    * Writes a proposal's edits into the notebook - unless any cell changed
    * since it was requested, since the edits (and their verification) were
    * computed against those exact cells; returns false then. Each edit is
-   * an ordinary source change, and can be undone in the cell.
-   *
-   * Then reopens the server-side session on the patched cells, the same as
-   * a page reload does: the live data-leak analysis carries state from
-   * earlier runs that re-running edited cells doesn't clear (the leak would
-   * still be reported against the fixed code), so the fix's cells start
-   * from a clean analysis and report again as they are re-run.
+   * an ordinary source change, so the usual change_cell flow re-analyzes
+   * it, and it can be undone in the cell.
    */
-  async applyFix(proposal: IFixProposal): Promise<boolean> {
+  applyFix(proposal: IFixProposal): boolean {
     const current = this._cellsAsJSON();
     const unchanged =
       current.length === proposal.cells.length &&
@@ -310,13 +305,6 @@ export class NotebookSessionManager {
     for (const edit of proposal.result.edits ?? []) {
       this._panel.content.widgets[edit.cell]?.model.sharedModel.setSource(edit.code);
     }
-    this._llmDiagnostics = [];
-    this._llmStaleDiagnostics = [];
-    this._llmApiSequenceDiagnostics = [];
-    const response = await postEvent('open_notebook', this._notebookId, {
-      notebook_json: this._cellsAsJSON()
-    });
-    this._setDeterministicDiagnostics(response.diagnostics);
     return true;
   }
 
