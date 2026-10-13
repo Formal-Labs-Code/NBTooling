@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "nbfix"
 version = "0.1.0"
-description = "Batch analysis and repair for data science scripts - the only NBTooling tool that repairs"
+description = "Static analysis for data science notebooks and scripts - stale/idle/isolated cells and data leakage"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -15,10 +15,23 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-jupyter[server]>=0.9",
+    "mcp<2",
 ]
-# LLM-assisted bug detection - transitively pulls in nbcore's own llm
-# extra (client/config transport plus the shared detect_bugs_event
-# feature) rather than redeclaring openai here.
+mcp = [
+    "mcp<2",
+]
+# Registers the nbfix REST API inside a running Jupyter server. This is
+# deliberately just jupyter_server, not jupyterlab - the labextension that
+# talks to this API is a separate package (jupyterlab-nbfix/) so that
+# installing it (and its jupyterlab/Node build-time cost) is opt-in and
+# doesn't weigh down a plain `pip install nbfix`.
+jupyter = [
+    "jupyter_server>=2.0,<3",
+]
+# LLM-assisted stale-cell and API-sequence detection - transitively pulls
+# in nbcore's own llm extra (client/config transport) rather than
+# redeclaring openai here.
 llm = [
     "nbcore[llm]",
 ]
@@ -28,3 +41,6 @@ nbfix = "nbfix.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nbfix"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"jupyter-config/jupyter_server_config.d" = "etc/jupyter/jupyter_server_config.d"

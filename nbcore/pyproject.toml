@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "nbcore"
 version = "0.1.0"
-description = "Parser, CFG, dependency-graph, and analysis framework shared by NBHarness, NBCompile, and NBFix"
+description = "Parser, CFG, dependency-graph, and analysis framework shared by NBFix and NBCompile"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

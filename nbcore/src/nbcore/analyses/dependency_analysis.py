@@ -168,7 +168,7 @@ def build_fixpoint_dependency_edges(notebook_IR) -> dict[int, set[int]]:
 # migrated from an older, cell-ID-ordered build_dependency_edges (see
 # this module's docstring). Lives here, in nbcore, rather than in any one
 # tool's llm/context_builder.py, because both NBFix's general
-# bug-detection context and NBHarness's API-sequence context consume the
+# bug-detection context and NBFix's API-sequence context consume the
 # same edge graph - keeping it here avoids either tool depending on the
 # other's code for a plain graph utility.
 build_dependency_edges = build_fixpoint_dependency_edges

@@ -130,9 +130,9 @@ dmypy.json
 
 # JupyterLab extension build artifacts
 node_modules/
-jupyterlab-nbharness/lib/
-jupyterlab-nbharness/tsconfig.tsbuildinfo
-jupyterlab-nbharness/jupyterlab_nbharness/labextension/
+jupyterlab-nbfix/lib/
+jupyterlab-nbfix/tsconfig.tsbuildinfo
+jupyterlab-nbfix/jupyterlab_nbfix/labextension/
 
 # macOS
 .DS_Store

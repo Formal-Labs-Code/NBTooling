@@ -1,4 +1,3 @@
-import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -7,8 +6,7 @@ import pytest
 pytest.importorskip("openai")
 
 from nbfix.cli import _build_parser, detect_bugs, main
-
-RES_PATH = os.path.join(os.path.dirname(__file__), "resources") + "/"
+from nbcore.resource_utils.utils import TEST_RES_PATH
 
 
 def _mock_openai_response(content: str):
@@ -48,7 +46,7 @@ class TestDetectBugsFunction(unittest.TestCase):
             '{"findings": []}'
         )
 
-        result = detect_bugs(RES_PATH + "sample_script.py", "full", None)
+        result = detect_bugs(TEST_RES_PATH + "sample_script.py", None, "full", None)
 
         self.assertEqual(result, "")  # Result.dumps() for zero findings
 
@@ -65,7 +63,7 @@ class TestDetectBugsFunction(unittest.TestCase):
             "--scope",
             "full",
             "-f",
-            RES_PATH + "sample_script.py",
+            TEST_RES_PATH + "sample_script.py",
         ]
         with patch("sys.argv", argv):
             with patch("builtins.print") as mock_print:

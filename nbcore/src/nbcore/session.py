@@ -7,12 +7,10 @@ from .ir.intermediate_representations import IntermediateRepresentations
 class AnalysisSession:
     """
     Generic driver: holds a dict of cells (whichever unit a tool loads -
-    notebook cells for NBHarness, top-level-statement pseudo-cells for
-    NBFix), a pluggable registry of analyses, and the run/event-dispatch
-    machinery every tool needs on top of that. No tool-specific loading
-    or analysis set is hardcoded here - each tool supplies its own via
-    register_analysis()/load(), so NBFix registering only its own
-    analyses never needs NBHarness's code (or vice versa).
+    notebook cells, or a script's `# %%` cells), a pluggable registry of
+    analyses, and the run/event-dispatch machinery every tool needs on
+    top of that. No tool-specific loading or analysis set is hardcoded
+    here - each tool supplies its own via register_analysis()/load().
     """
 
     def __init__(self, level=5, filename=""):

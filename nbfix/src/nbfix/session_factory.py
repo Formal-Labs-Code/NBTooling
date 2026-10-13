@@ -1,14 +1,19 @@
 from nbcore.session import AnalysisSession
 from nbcore.analyses.dataleak_analysis import DataLeakAnalysis, DATA_LEAK
 
+from .analyses.stale_cell_analysis import StaleCellAnalysis, STALE
+from .analyses.idle_cell_analysis import IdleCellAnalysis, IDLE
+from .analyses.isolated_cell_analysis import IsolatedCellAnalysis, ISOLATED
+
 
 def new_session(level=5, filename="") -> AnalysisSession:
-    """Builds an AnalysisSession with NBFix's own analysis set registered.
-    Scripts only - no STALE/IDLE/ISOLATED here, those are notebook-edit-
-    lifecycle concepts with no script analog (see NBHarness's own
-    session_factory). type_shape_analysis.py stays unwired here, same as
-    it was in the original NBFix.all_analyses - it's still a standalone
-    function, not yet an Analysis subclass with analyze_notebook."""
+    """Builds an AnalysisSession with NBFix's own analysis set
+    registered - the notebook-edit-lifecycle ones (stale/idle/isolated)
+    plus data leakage. AnalysisSession itself knows nothing about which
+    analyses exist; this is where NBFix opts into its four."""
     session = AnalysisSession(level=level, filename=filename)
     session.register_analysis(DATA_LEAK, DataLeakAnalysis())
+    session.register_analysis(STALE, StaleCellAnalysis())
+    session.register_analysis(IDLE, IdleCellAnalysis())
+    session.register_analysis(ISOLATED, IsolatedCellAnalysis())
     return session

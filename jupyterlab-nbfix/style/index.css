@@ -1,0 +1,21 @@
+/* NBFix diagnostics are rendered entirely through the CodeMirror linter
+   extension registered in src/linter.ts. */
+
+/* Distinguishes LLM-suggested findings (detect_bugs) from deterministic
+   ones (STALE/IDLE/ISOLATED/DATA_LEAK) - a dashed underline reads as
+   "suggested" rather than "proven", matching the difference in confidence
+   between an AI-flagged issue and a statically-proven one. */
+.cm-nbfix-llm-finding {
+  text-decoration-style: dashed !important;
+}
+
+/* Command icon (command palette entries) for the two detect_bugs commands.
+   Raster PNG via iconClass/background-image rather than LabIcon, since
+   LabIcon expects an SVG string - iconClass is the standard CommandRegistry
+   option for exactly this case (see @lumino/commands' ICommandOptions). */
+.jp-nbfix-icon {
+  background-image: url(./icons/nbfix.png);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}

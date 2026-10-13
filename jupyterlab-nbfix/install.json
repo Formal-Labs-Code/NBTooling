@@ -1,0 +1,5 @@
+{
+  "packageManager": "python",
+  "packageName": "nbfix",
+  "uninstallInstructions": "Use your Python package manager (pip, conda, etc.) to uninstall the package nbfix"
+}

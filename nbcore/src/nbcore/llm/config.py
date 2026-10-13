@@ -11,7 +11,7 @@ def default_client() -> LLMClient:
     Builds an LLMClient from NBCORE_LLM_BASE_URL/NBCORE_LLM_MODEL env
     vars, defaulting to a local Ollama instance. One shared prefix, not
     one per tool: this function is nbcore-owned and used identically by
-    both NBHarness's and NBFix's LLM features (see detect_bugs_event.py,
+    every LLM feature (see detect_bugs_event.py,
     detect_stale_cells_event.py, detect_api_sequence_event.py) - a
     per-tool prefix would need this function parameterized per caller,
     which nothing currently needs.

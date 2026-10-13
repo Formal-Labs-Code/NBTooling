@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.21", "hatch-jupyter-builder>=0.8.2", "jupyterlab>=4.0,<5"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jupyterlab-nbfix"
+version = "0.1.0"
+description = "JupyterLab labextension surfacing NBFix notebook diagnostics live in the editor"
+requires-python = ">=3.9"
+
+[tool.hatch.build.targets.wheel]
+packages = ["jupyterlab_nbfix"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"install.json" = "share/jupyter/labextensions/jupyterlab-nbfix/install.json"
+"jupyterlab_nbfix/labextension" = "share/jupyter/labextensions/jupyterlab-nbfix"
+
+[tool.hatch.build.hooks.jupyter-builder]
+dependencies = ["hatch-jupyter-builder>=0.8.2"]
+build-function = "hatch_jupyter_builder.npm_builder"
+ensured-targets = [
+    "jupyterlab_nbfix/labextension/static/style.js",
+    "jupyterlab_nbfix/labextension/package.json",
+]
+skip-if-exists = ["jupyterlab_nbfix/labextension/static/style.js"]
+
+[tool.hatch.build.hooks.jupyter-builder.build-kwargs]
+build_cmd = "build:prod"
+npm = ["npm"]
+
+[tool.hatch.build.hooks.jupyter-builder.editable-build-kwargs]
+build_cmd = "install:extension"
+npm = ["npm"]
+source_dir = "src"
+build_dir = "jupyterlab_nbfix/labextension"

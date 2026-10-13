@@ -7,9 +7,9 @@
 
 # JS build artifacts - never needed in the Docker build context
 node_modules
-jupyterlab-nbharness/lib
-jupyterlab-nbharness/jupyterlab_nbharness/labextension
-jupyterlab-nbharness/tsconfig.tsbuildinfo
+jupyterlab-nbfix/lib
+jupyterlab-nbfix/jupyterlab_nbfix/labextension
+jupyterlab-nbfix/tsconfig.tsbuildinfo
 
 # not needed to build the image
 tests
