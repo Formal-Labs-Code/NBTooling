@@ -281,7 +281,8 @@ def _split_blank_lines(text: str):
 def _line_key(line: str) -> str:
     """Indentation plus content without whitespace, quote style ignored."""
     indent = len(line) - len(line.lstrip())
-    return f"{indent}:{re.sub(r'\s+', '', line).replace(chr(39), chr(34))}"
+    content = re.sub(r"\s+", "", line).replace("'", '"')
+    return f"{indent}:{content}"
 
 
 def _code_cells(notebook: dict) -> dict[int, str]:
