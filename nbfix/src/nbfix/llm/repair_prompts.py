@@ -21,7 +21,7 @@ A notebook can split its data more than once - for example, one split per model.
 
 ## Cells
 
-Cells run top to bottom, and a cell can only use names defined in itself or in an earlier cell. Fixing a preprocessing leak often means restructuring: when the split comes after the preprocessing step, move the split up, or move the preprocessing down into the split's cell (after the split) or a later cell. Rewriting the cells involved like this is expected.
+Cells run top to bottom, and a cell can only use names defined in itself or in an earlier cell. Fixing a preprocessing leak often means restructuring: when the split comes after the preprocessing step, move the split up, or move the preprocessing down into the split's cell (after the split) or a later cell. Rewriting the cells involved like this is expected. When you move, rename or remove a variable, update every cell that uses it - each preprocessing leak in the request lists those cells under "Data flow".
 
 ## Rules
 
@@ -50,7 +50,7 @@ def build_repair_prompt(cells, editable, leaks, warnings, previous=None) -> str:
     cells: [(cell_id, code)] for every code cell, in order.
     editable: set of cell ids the model may change.
     leaks: [{"message", "sink": (cell, line, text), "source": (cell, line, text) | None,
-             "split": (cell, text) | None}]
+             "split": (cell, text) | None, "flow": str | None}]
     warnings: the analysis warnings for the original code.
     previous: on a retry, {"attempt": n, "edits": [...], "problems": [...],
               "repeats": earlier attempt number | None} for the rejected attempt n.
@@ -69,6 +69,8 @@ def build_repair_prompt(cells, editable, leaks, warnings, previous=None) -> str:
         if leak.get("split"):
             cell, text = leak["split"]
             leak_lines.append(f"   The evaluated data comes from the split in cell {cell}: `{text}`")
+        if leak.get("flow"):
+            leak_lines.append(f"   Data flow: {leak['flow']}")
     sections.append("## Data leaks to fix\n" + "\n".join(leak_lines))
 
     if warnings:

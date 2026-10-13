@@ -85,6 +85,12 @@ class TestFix(unittest.TestCase):
                       "`X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2)`",
                       prompt)
 
+    def test_prompt_shows_data_flow_for_a_split_in_a_later_cell(self):
+        client = _client(*[_edits()] * 3)
+        fix(read_json(TEST_RES_PATH + "dataleak_imputer_true.ipynb"), client=client)
+        self.assertIn("   Data flow: `X_filled` (made in cell 1) is used in cell 2. The split is in cell 2, "
+                      "so it runs after cell 1", _prompt(client))
+
     def test_input_notebook_is_not_modified(self):
         before = copy.deepcopy(self.leaky)
         fix(self.leaky, client=_client(_edits((2, self.fixed_cell_2))))

@@ -31,8 +31,8 @@ from typing import Any
 from nbcore.resource_utils.script_loading import cell_start_lines, is_script
 
 from .code_checks import (
-    first_binding, fits_on_test_data, misaligned_splits, parse_cell, split_origin, undefined_reads,
-    unused_results,
+    first_binding, fits_on_test_data, misaligned_splits, parse_cell, produced_names, readers, split_origin,
+    undefined_reads, unused_results,
 )
 from .findings import analyze_data_leaks
 from .llm.repair_prompts import REPAIR_SYSTEM_PROMPT, build_repair_prompt
@@ -322,7 +322,32 @@ def _describe(finding, cells) -> dict[str, Any]:
 
     sink = finding.get("sink")
     split = split_origin(cells, sink) if sink else None
-    return {"message": finding["message"], "sink": where("sink"), "source": where("source"), "split": split}
+    source = where("source")
+    return {"message": finding["message"], "sink": where("sink"), "source": source, "split": split,
+            "flow": _data_flow(finding, cells, source, split)}
+
+
+def _data_flow(finding, cells, source, split) -> str | None:
+    """For a preprocessing leak: which cells use what the preprocessing step
+    produces, and whether the split runs after it - what a fix has to move
+    and rewire, which models otherwise tend to miss (see
+    benchmark_results/fix/README.md, "Why first attempts fail")."""
+    if not finding["message"].startswith("Preprocessing leak") or not source or not source[2]:
+        return None
+    cell = source[0]
+    parts = []
+    for name in produced_names(source[2]):
+        used = readers(cells, name, after=cell)
+        if used:
+            parts.append(f"`{name}` (made in cell {cell}) is used in {_cells(used)}.")
+    if split and split[0] > cell:
+        parts.append(f"The split is in cell {split[0]}, so it runs after cell {cell}: the preprocessing has to move "
+                     "after it, and every cell that uses its result must change with it.")
+    return " ".join(parts) or None
+
+
+def _cells(ids) -> str:
+    return ("cell " if len(ids) == 1 else "cells ") + ", ".join(str(i) for i in ids)
 
 
 def _line_text(code: str, line) -> str | None:

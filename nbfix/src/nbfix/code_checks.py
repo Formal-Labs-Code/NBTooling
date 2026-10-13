@@ -203,6 +203,38 @@ def split_origin(cells: dict[int, str], name: str) -> tuple[int, str] | None:
     return cell_id, text
 
 
+def produced_names(statement: str) -> list[str]:
+    """What a preprocessing statement produces: the names it assigns
+    (`X_scaled = scaler.fit_transform(X)`), or the fitted object for a bare
+    fit call (`scaler.fit(X)`). Empty if the line isn't a whole statement."""
+    try:
+        tree = ast.parse(statement.strip())
+    except SyntaxError:
+        return []
+    if len(tree.body) != 1:
+        return []
+    node = tree.body[0]
+    if isinstance(node, ast.Assign):
+        return [name for target in node.targets for name in sorted(_stored(target))]
+    if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)):
+        return [node.value.func.value.id]
+    return []
+
+
+def readers(cells: dict[int, str], name: str, after: int) -> list[int]:
+    """The cells after `after` that read `name` anywhere - the ones that can
+    see what cell `after` binds it to."""
+    found = []
+    for cell_id, code in cells.items():
+        if cell_id <= after:
+            continue
+        loads = {node.id for node in ast.walk(parse_cell(code)) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+        if name in loads:
+            found.append(cell_id)
+    return found
+
+
 def _call_name(node) -> str | None:
     if not isinstance(node, ast.Call):
         return None

@@ -1,6 +1,8 @@
 import unittest
 
-from nbfix.code_checks import first_binding, fits_on_test_data, misaligned_splits, undefined_reads, unused_results
+from nbfix.code_checks import (
+    first_binding, fits_on_test_data, misaligned_splits, produced_names, readers, undefined_reads, unused_results,
+)
 
 SPLIT = "X_train, X_test, y_train, y_test = train_test_split(X, y)"
 
@@ -38,6 +40,18 @@ class TestMisalignedSplits(unittest.TestCase):
         cells = {0: SPLIT, 1: "A = scaler.fit_transform(X_train)", 2: "model.fit(A, y_train)",
                  3: "model.score(scaler.transform(X_test), y_test)"}
         self.assertEqual(misaligned_splits(cells), set())
+
+
+class TestDataFlow(unittest.TestCase):
+    def test_produced_names(self):
+        self.assertEqual(produced_names("X_res, y_res = smote.fit_resample(X, y)"), ["X_res", "y_res"])
+        self.assertEqual(produced_names("scaler.fit(X)"), ["scaler"])
+        self.assertEqual(produced_names("return scaler.fit_transform(X)"), [])
+        self.assertEqual(produced_names("X_train, X_test = train_test_split("), [])
+
+    def test_readers_are_later_cells_only(self):
+        cells = {0: "X = load()", 1: "X = clean(X)", 2: "X = scale(X)", 3: "split(X)", 4: "print(1)"}
+        self.assertEqual(readers(cells, "X", after=2), [3])
 
 
 class TestUndefinedReads(unittest.TestCase):
