@@ -49,8 +49,16 @@ class TestUndefinedReads(unittest.TestCase):
     def test_read_before_a_later_cell_defines_it(self):
         self.assertEqual(undefined_reads({0: "a = b", 1: "b = 1"}), {"b": 0})
 
-    def test_function_bodies_and_comprehensions_are_not_reads(self):
-        self.assertEqual(undefined_reads({0: "def f():\n    return later\nxs = [i for i in range(3)]"}), {})
+    def test_function_bodies_see_module_names_bound_anywhere(self):
+        self.assertEqual(undefined_reads({0: "def f():\n    return later\nxs = [i for i in range(3)]",
+                                          1: "later = 1"}), {})
+
+    def test_function_reading_a_name_nothing_binds(self):
+        # The wrong fix qwen2.5-coder:7b gave for dataleak_two_leaks_true.py in run 6.
+        main = ("def main(X, y):\n    A, A_test, b, b_test = train_test_split(X, y)\n"
+                "    second.fit(A, b_train)\n    g = lambda v: v + 1\n    import os\n    return os.sep")
+        imports = "from sklearn.model_selection import train_test_split\nfrom models import Model\n"
+        self.assertEqual(undefined_reads({0: imports + "second = Model()", 1: main}), {"b_train": 1})
 
 
 class TestUnusedResults(unittest.TestCase):

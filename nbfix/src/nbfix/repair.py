@@ -241,8 +241,8 @@ def _strip_fence(code: str) -> str:
 
 def _keep_original_formatting(original: str, code: str) -> str:
     """The model's cell with formatting-only changes undone. Lines are matched
-    on their content ignoring whitespace inside them (indentation counts - it
-    is Python syntax); a matched line keeps its original text and the blank
+    on their content ignoring whitespace inside them and quote style
+    (indentation counts - it is Python syntax); a matched line keeps its original text and the blank
     lines before it, and only changed or new lines come from the model.
     Models rewriting a whole cell (a script without cell markers is one)
     otherwise reformat lines they had no reason to touch."""
@@ -279,8 +279,9 @@ def _split_blank_lines(text: str):
 
 
 def _line_key(line: str) -> str:
+    """Indentation plus content without whitespace, quote style ignored."""
     indent = len(line) - len(line.lstrip())
-    return f"{indent}:{re.sub(r'\s+', '', line)}"
+    return f"{indent}:{re.sub(r'\s+', '', line).replace(chr(39), chr(34))}"
 
 
 def _code_cells(notebook: dict) -> dict[int, str]:

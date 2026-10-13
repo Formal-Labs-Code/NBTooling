@@ -99,12 +99,12 @@ class TestFix(unittest.TestCase):
 
     def test_formatting_only_changes_are_undone(self):
         notebook = read_json(TEST_RES_PATH + "dataleak_fit_transform_split_true.ipynb")
-        notebook["cells"][2]["source"] = "# fit\n\nscaler = StandardScaler( )\n\nscaler.fit(X)"
-        reformatted = "# fit\nscaler = StandardScaler()\nscaler.fit(X_train)"
+        notebook["cells"][2]["source"] = "# fit\n\nscaler = StandardScaler( )\nprint('ok')\n\nscaler.fit(X)"
+        reformatted = '# fit\nscaler = StandardScaler()\nprint("ok")\nscaler.fit(X_train)'
         result = fix(notebook, client=_client(_edits((2, reformatted))))
         self.assertEqual(result["status"], "verified")
         # Only the fit line changed; the spacing and blank lines are the original's.
-        self.assertEqual(result["edits"][0]["code"], "# fit\n\nscaler = StandardScaler( )\n\nscaler.fit(X_train)")
+        self.assertEqual(result["edits"][0]["code"], "# fit\n\nscaler = StandardScaler( )\nprint('ok')\n\nscaler.fit(X_train)")
 
     def test_still_leaky_patch_is_retried_with_feedback_then_unverified(self):
         still_leaky = "scaler = StandardScaler()\nscaler.fit(X)  # unchanged fit"

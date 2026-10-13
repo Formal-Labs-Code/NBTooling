@@ -45,13 +45,42 @@ def first_binding(cells: dict[int, str], name: str, after: int = -1) -> int | No
 
 
 def undefined_reads(cells: dict[int, str]) -> dict[str, int]:
-    """Name -> first cell that reads it at module level before any earlier
-    statement binds it. Function and class bodies are not checked (they run
-    whenever they're called)."""
+    """Name -> first cell that reads it before it can be defined: at module
+    level, before any earlier statement binds it; inside a function (which
+    runs whenever it's called), when it's neither a parameter nor bound in
+    that function nor bound at module level anywhere."""
     defined, undefined = set(_PREDEFINED), {}
-    for cell_id, code in cells.items():
-        _scan(parse_cell(code).body, defined, undefined, cell_id)
+    trees = {cell_id: parse_cell(code) for cell_id, code in cells.items()}
+    for cell_id, tree in trees.items():
+        _scan(tree.body, defined, undefined, cell_id)
+    for cell_id, tree in trees.items():
+        for function in (node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))):
+            for name in sorted(_function_reads(function) - defined):
+                undefined.setdefault(name, cell_id)
     return undefined
+
+
+def _function_reads(function) -> set[str]:
+    """Names a function reads that it doesn't bind itself (parameters, any
+    assignment in its body, nested definitions, imports) - flow-insensitively,
+    so only never-bound names, not reads before assignment. Nested functions
+    are checked on their own, with the enclosing function's names visible."""
+    args = function.args
+    bound = {arg.arg for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]}
+    bound |= {arg.arg for arg in (args.vararg, args.kwarg) if arg}
+    reads = set()
+    for node in ast.walk(function):
+        if isinstance(node, ast.Name):
+            (reads if isinstance(node.ctx, ast.Load) else bound).add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node is not function:
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound |= {alias.asname or alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)  # lambda and nested-function parameters
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+    return reads - bound
 
 
 def unused_results(cells: dict[int, str], methods: set[str]) -> set[str]:
